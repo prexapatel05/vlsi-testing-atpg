@@ -1,0 +1,110 @@
+module barrel_shifter_8bit(
+    output y7, y6, y5, y4, y3, y2, y1, y0,
+    input a7, a6, a5, a4, a3, a2, a1, a0,
+    input s2, s1, s0
+);
+
+     --- INTERNAL WIRE DECLARATIONS ---
+     Selection complements
+    wire ns2, ns1, ns0;
+
+     Stage 0 Wires (Shift by 1)
+    wire st0_7, st0_6, st0_5, st0_4, st0_3, st0_2, st0_1, st0_0;
+    wire m0_7_a, m0_7_b, m0_6_a, m0_6_b, m0_5_a, m0_5_b, m0_4_a, m0_4_b;
+    wire m0_3_a, m0_3_b, m0_2_a, m0_2_b, m0_1_a, m0_1_b, m0_0_a, m0_0_b;
+
+     Stage 1 Wires (Shift by 2)
+    wire st1_7, st1_6, st1_5, st1_4, st1_3, st1_2, st1_1, st1_0;
+    wire m1_7_a, m1_7_b, m1_6_a, m1_6_b, m1_5_a, m1_5_b, m1_4_a, m1_4_b;
+    wire m1_3_a, m1_3_b, m1_2_a, m1_2_b, m1_1_a, m1_1_b, m1_0_a, m1_0_b;
+
+     Stage 2 Wires (Shift by 4) - Final Output
+    wire m2_7_a, m2_7_b, m2_6_a, m2_6_b, m2_5_a, m2_5_b, m2_4_a, m2_4_b;
+    wire m2_3_a, m2_3_b, m2_2_a, m2_2_b, m2_1_a, m2_1_b, m2_0_a, m2_0_b;
+
+     --- GATE INSTANTIATIONS ---
+
+     Selection Inverters
+    NOT (ns0, s0);
+    NOT (ns1, s1);
+    NOT (ns2, s2);
+
+     --- STAGE 0 SHIFT BY 1 (IF S0=1) ---
+    AND (m0_7_a, a7, ns0);
+    AND (m0_7_b, 1'b0, s0);
+    OR (st0_7, m0_7_a, m0_7_b);
+    AND (m0_6_a, a6, ns0);
+    AND (m0_6_b, a7, s0);
+    OR (st0_6, m0_6_a, m0_6_b);
+    AND (m0_5_a, a5, ns0);
+    AND (m0_5_b, a6, s0);
+    OR (st0_5, m0_5_a, m0_5_b);
+    AND (m0_4_a, a4, ns0);
+    AND (m0_4_b, a5, s0);
+    OR (st0_4, m0_4_a, m0_4_b);
+    AND (m0_3_a, a3, ns0);
+    AND (m0_3_b, a4, s0);
+    OR (st0_3, m0_3_a, m0_3_b);
+    AND (m0_2_a, a2, ns0);
+    AND (m0_2_b, a3, s0);
+    OR (st0_2, m0_2_a, m0_2_b);
+    AND (m0_1_a, a1, ns0);
+    AND (m0_1_b, a2, s0);
+    OR (st0_1, m0_1_a, m0_1_b);
+    AND (m0_0_a, a0, ns0);
+    AND (m0_0_b, a1, s0);
+    OR (st0_0, m0_0_a, m0_0_b);
+
+     --- STAGE 1 SHIFT BY 2 (IF S1=1) ---
+    AND (m1_7_a, st0_7, ns1);
+    AND (m1_7_b, 1'b0, s1);
+    OR (st1_7, m1_7_a, m1_7_b);
+    AND (m1_6_a, st0_6, ns1);
+    AND (m1_6_b, 1'b0, s1);
+    OR (st1_6, m1_6_a, m1_6_b);
+    AND (m1_5_a, st0_5, ns1);
+    AND (m1_5_b, st0_7, s1);
+    OR (st1_5, m1_5_a, m1_5_b);
+    AND (m1_4_a, st0_4, ns1);
+    AND (m1_4_b, st0_6, s1);
+    OR (st1_4, m1_4_a, m1_4_b);
+    AND (m1_3_a, st0_3, ns1);
+    AND (m1_3_b, st0_5, s1);
+    OR (st1_3, m1_3_a, m1_3_b);
+    AND (m1_2_a, st0_2, ns1);
+    AND (m1_2_b, st0_4, s1);
+    OR (st1_2, m1_2_a, m1_2_b);
+    AND (m1_1_a, st0_1, ns1);
+    AND (m1_1_b, st0_3, s1);
+    OR (st1_1, m1_1_a, m1_1_b);
+    AND (m1_0_a, st0_0, ns1);
+    AND (m1_0_b, st0_2, s1);
+    OR (st1_0, m1_0_a, m1_0_b);
+
+     --- STAGE 2 SHIFT BY 4 (IF S2=1) ---
+    AND (m2_7_a, st1_7, ns2);
+    AND (m2_7_b, 1'b0, s2);
+    OR (y7, m2_7_a, m2_7_b);
+    AND (m2_6_a, st1_6, ns2);
+    AND (m2_6_b, 1'b0, s2);
+    OR (y6, m2_6_a, m2_6_b);
+    AND (m2_5_a, st1_5, ns2);
+    AND (m2_5_b, 1'b0, s2);
+    OR (y5, m2_5_a, m2_5_b);
+    AND (m2_4_a, st1_4, ns2);
+    AND (m2_4_b, 1'b0, s2);
+    OR (y4, m2_4_a, m2_4_b);
+    AND (m2_3_a, st1_3, ns2);
+    AND (m2_3_b, st1_7, s2);
+    OR (y3, m2_3_a, m2_3_b);
+    AND (m2_2_a, st1_2, ns2);
+    AND (m2_2_b, st1_6, s2);
+    OR (y2, m2_2_a, m2_2_b);
+    AND (m2_1_a, st1_1, ns2);
+    AND (m2_1_b, st1_5, s2);
+    OR (y1, m2_1_a, m2_1_b);
+    AND (m2_0_a, st1_0, ns2);
+    AND (m2_0_b, st1_4, s2);
+    OR (y0, m2_0_a, m2_0_b);
+
+endmodule

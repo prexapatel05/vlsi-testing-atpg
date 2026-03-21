@@ -1,0 +1,125 @@
+module carry_select_adder_8bit(
+    output s7, s6, s5, s4, s3, s2, s1, s0, cout,
+    input a7, a6, a5, a4, a3, a2, a1, a0,
+    input b7, b6, b5, b4, b3, b2, b1, b0,
+    input cin
+);
+
+    // --- INTERNAL WIRE DECLARATIONS ---
+    // Stage 1 Carry
+    wire c0, c1, c2, c3;
+    // Stage 2: Sum/Carry assuming Cin=0
+    wire s4_0, s5_0, s6_0, s7_0, c4_0, c5_0, c6_0, cout_0;
+    // Stage 2: Sum/Carry assuming Cin=1
+    wire s4_1, s5_1, s6_1, s7_1, c4_1, c5_1, c6_1, cout_1;
+    // Mux selection signals
+    wire nc3;
+    // XOR intermediate wires
+    wire w0_1, w1_1, w2_1, w3_1, w4_1, w5_01, w6_01, w7_01, w5_11, w6_11, w7_11;
+    // AND intermediate wires
+    wire w0_2, w0_3, w1_2, w1_3, w2_2, w2_3, w3_2, w3_3;
+    wire w5_02, w5_03, w6_02, w6_03, w7_02, w7_03;
+    wire w5_12, w5_13, w6_12, w6_13, w7_12, w7_13;
+    // Multiplexer intermediate wires
+    wire g4_0, g4_1, g5_0, g5_1, g6_0, g6_1, g7_0, g7_1, gc_0, gc_1;
+
+    // --- STAGE 1: LOWER 4-BIT RIPPLE CARRY ADDER ---
+    // Bit 0
+    XOR (w0_1, a0, b0);
+    XOR (s0, w0_1, cin);
+    AND (w0_2, a0, b0);
+    AND (w0_3, w0_1, cin);
+    OR (c0, w0_2, w0_3);
+
+    // Bit 1
+    XOR (w1_1, a1, b1);
+    XOR (s1, w1_1, c0);
+    AND (w1_2, a1, b1);
+    AND (w1_3, w1_1, c0);
+    OR (c1, w1_2, w1_3);
+
+    // Bit 2
+    XOR (w2_1, a2, b2);
+    XOR (s2, w2_1, c1);
+    AND (w2_2, a2, b2);
+    AND (w2_3, w2_1, c1);
+    OR (c2, w2_2, w2_3);
+
+    // Bit 3
+    XOR (w3_1, a3, b3);
+    XOR (s3, w3_1, c2);
+    AND (w3_2, a3, b3);
+    AND (w3_3, w3_1, c2);
+    OR (c3, w3_2, w3_3);
+
+    // --- STAGE 2: UPPER 4-BIT RCA (CIN = 0 PATH) ---
+    // Bit 4
+    XOR (s4_0, a4, b4);
+    AND (c4_0, a4, b4);
+    // Bit 5
+    XOR (w5_01, a5, b5);
+    XOR (s5_0, w5_01, c4_0);
+    AND (w5_02, a5, b5);
+    AND (w5_03, w5_01, c4_0);
+    OR (c5_0, w5_02, w5_03);
+    // Bit 6
+    XOR (w6_01, a6, b6);
+    XOR (s6_0, w6_01, c5_0);
+    AND (w6_02, a6, b6);
+    AND (w6_03, w6_01, c5_0);
+    OR (c6_0, w6_02, w6_03);
+    // Bit 7
+    XOR (w7_01, a7, b7);
+    XOR (s7_0, w7_01, c6_0);
+    AND (w7_02, a7, b7);
+    AND (w7_03, w7_01, c6_0);
+    OR (cout_0, w7_02, w7_03);
+
+    // --- STAGE 2: UPPER 4-BIT RCA (CIN = 1 PATH) ---
+    // Bit 4
+    XOR (w4_1, a4, b4);
+    NOT (s4_1, w4_1);
+    OR (c4_1, a4, b4);
+    // Bit 5
+    XOR (w5_11, a5, b5);
+    XOR (s5_1, w5_11, c4_1);
+    AND (w5_12, a5, b5);
+    AND (w5_13, w5_11, c4_1);
+    OR (c5_1, w5_12, w5_13);
+    // Bit 6
+    XOR (w6_11, a6, b6);
+    XOR (s6_1, w6_11, c5_1);
+    AND (w6_12, a6, b6);
+    AND (w6_13, w6_11, c5_1);
+    OR (c6_1, w6_12, w6_13);
+    // Bit 7
+    XOR (w7_11, a7, b7);
+    XOR (s7_1, w7_11, c6_1);
+    AND (w7_12, a7, b7);
+    AND (w7_13, w7_11, c6_1);
+    OR (cout_1, w7_12, w7_13);
+
+    // --- MULTIPLEXER SELECTION LOGIC ---
+    NOT (nc3, c3);
+    // Sum bit 4
+    AND (g4_0, s4_0, nc3);
+    AND (g4_1, s4_1, c3);
+    OR (s4, g4_0, g4_1);
+    // Sum bit 5
+    AND (g5_0, s5_0, nc3);
+    AND (g5_1, s5_1, c3);
+    OR (s5, g5_0, g5_1);
+    // Sum bit 6
+    AND (g6_0, s6_0, nc3);
+    AND (g6_1, s6_1, c3);
+    OR (s6, g6_0, g6_1);
+    // Sum bit 7
+    AND (g7_0, s7_0, nc3);
+    AND (g7_1, s7_1, c3);
+    OR (s7, g7_0, g7_1);
+    // Final Carry Out
+    AND (gc_0, cout_0, nc3);
+    AND (gc_1, cout_1, c3);
+    OR (cout, gc_0, gc_1);
+
+endmodule

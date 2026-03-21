@@ -1,0 +1,132 @@
+module alu_6bit_gate_level(
+    output f5, f4, f3, f2, f1, f0, cout,
+    input a5, a4, a3, a2, a1, a0,
+    input b5, b4, b3, b2, b1, b0,
+    input cin, s1, s0
+);
+
+    // --- INTERNAL WIRE DECLARATIONS ---
+    
+    // Selection complements
+    wire ns1, ns0;
+
+    // Carry chain wires
+    wire c0, c1, c2, c3, c4;
+
+    // Bit-wise Logic results (Logical operations)
+    wire AND0, OR0, XOR0, AND1, OR1, XOR1, AND2, OR2, XOR2;
+    wire AND3, OR3, XOR3, AND4, OR4, XOR4, AND5, OR5, XOR5;
+
+    // Full Adder intermediate wires (Sum AND Carry logic)
+    wire sum0, w0_1, w0_2, w0_3;
+    wire sum1, w1_1, w1_2, w1_3;
+    wire sum2, w2_1, w2_2, w2_3;
+    wire sum3, w3_1, w3_2, w3_3;
+    wire sum4, w4_1, w4_2, w4_3;
+    wire sum5, w5_1, w5_2, w5_3;
+
+    // Multiplexer product terms (Selection logic)
+    wire m0_0, m0_1, m0_2, m0_3;
+    wire m1_0, m1_1, m1_2, m1_3;
+    wire m2_0, m2_1, m2_2, m2_3;
+    wire m3_0, m3_1, m3_2, m3_3;
+    wire m4_0, m4_1, m4_2, m4_3;
+    wire m5_0, m5_1, m5_2, m5_3;
+
+    // --- GATE INSTANTIATIONS ---
+
+    // 1. Selection Logic Inverters
+    NOT (ns1, s1);
+    NOT (ns0, s0);
+
+    // 2. Bit 0 Logic (LSB)
+    AND (AND0, a0, b0);
+    OR  (OR0,  a0, b0);
+    XOR (XOR0, a0, b0);
+    XOR (w0_1, a0, b0);
+    XOR (sum0, w0_1, cin);
+    AND (w0_2, a0, b0);
+    AND (w0_3, w0_1, cin);
+    OR  (c0, w0_2, w0_3);
+    AND (m0_0, sum0, ns1, ns0); // Mode 00: ADD
+    AND (m0_1, AND0, ns1, s0);  // Mode 01: AND
+    AND (m0_2, OR0,  s1,  ns0); // Mode 10: OR
+    AND (m0_3, XOR0, s1,  s0);  // Mode 11: XOR
+    OR  (f0, m0_0, m0_1, m0_2, m0_3);
+
+    // 3. Bit 1 Logic
+    AND (AND1, a1, b1);
+    OR  (OR1,  a1, b1);
+    XOR (XOR1, a1, b1);
+    XOR (w1_1, a1, b1);
+    XOR (sum1, w1_1, c0);
+    AND (w1_2, a1, b1);
+    AND (w1_3, w1_1, c0);
+    OR  (c1, w1_2, w1_3);
+    AND (m1_0, sum1, ns1, ns0);
+    AND (m1_1, AND1, ns1, s0);
+    AND (m1_2, OR1,  s1,  ns0);
+    AND (m1_3, XOR1, s1,  s0);
+    OR  (f1, m1_0, m1_1, m1_2, m1_3);
+
+    // 4. Bit 2 Logic
+    AND (AND2, a2, b2);
+    OR  (OR2,  a2, b2);
+    XOR (XOR2, a2, b2);
+    XOR (w2_1, a2, b2);
+    XOR (sum2, w2_1, c1);
+    AND (w2_2, a2, b2);
+    AND (w2_3, w2_1, c1);
+    OR  (c2, w2_2, w2_3);
+    AND (m2_0, sum2, ns1, ns0);
+    AND (m2_1, AND2, ns1, s0);
+    AND (m2_2, OR2,  s1,  ns0);
+    AND (m2_3, XOR2, s1,  s0);
+    OR  (f2, m2_0, m2_1, m2_2, m2_3);
+
+    // 5. Bit 3 Logic
+    AND (AND3, a3, b3);
+    OR  (OR3,  a3, b3);
+    XOR (XOR3, a3, b3);
+    XOR (w3_1, a3, b3);
+    XOR (sum3, w3_1, c2);
+    AND (w3_2, a3, b3);
+    AND (w3_3, w3_1, c2);
+    OR  (c3, w3_2, w3_3);
+    AND (m3_0, sum3, ns1, ns0);
+    AND (m3_1, AND3, ns1, s0);
+    AND (m3_2, OR3,  s1,  ns0);
+    AND (m3_3, XOR3, s1,  s0);
+    OR  (f3, m3_0, m3_1, m3_2, m3_3);
+
+    // 6. Bit 4 Logic
+    AND (AND4, a4, b4);
+    OR  (OR4,  a4, b4);
+    XOR (XOR4, a4, b4);
+    XOR (w4_1, a4, b4);
+    XOR (sum4, w4_1, c3);
+    AND (w4_2, a4, b4);
+    AND (w4_3, w4_1, c3);
+    OR  (c4, w4_2, w4_3);
+    AND (m4_0, sum4, ns1, ns0);
+    AND (m4_1, AND4, ns1, s0);
+    AND (m4_2, OR4,  s1,  ns0);
+    AND (m4_3, XOR4, s1,  s0);
+    OR  (f4, m4_0, m4_1, m4_2, m4_3);
+
+    // 7. Bit 5 Logic (MSB)
+    AND (AND5, a5, b5);
+    OR  (OR5,  a5, b5);
+    XOR (XOR5, a5, b5);
+    XOR (w5_1, a5, b5);
+    XOR (sum5, w5_1, c4);
+    AND (w5_2, a5, b5);
+    AND (w5_3, w5_1, c4);
+    OR  (cout, w5_2, w5_3);
+    AND (m5_0, sum5, ns1, ns0);
+    AND (m5_1, AND5, ns1, s0);
+    AND (m5_2, OR5,  s1,  ns0);
+    AND (m5_3, XOR5, s1,  s0);
+    OR  (f5, m5_0, m5_1, m5_2, m5_3);
+
+endmodule
