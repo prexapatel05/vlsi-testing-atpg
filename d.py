@@ -1,5 +1,6 @@
 from time import perf_counter
 
+from collections import deque
 from netlist_graph import (
     generate_faults,
     levelize,
@@ -10,17 +11,306 @@ from netlist_graph import (
 class DAlgorithmEngine:
     def __init__(self, circuit):
         self.circuit = circuit
+        self.active_fault = None
         self.backtrack_count = 0
 
+    @staticmethod
+    def _invert_logic(v):
+        inv = {'0': '1', '1': '0', 'D': 'D_bar', 'D_bar': 'D', 'X': 'X'}
+        return inv.get(v, 'X')
+
+    @staticmethod
+    def _logic_to_pair(v):
+        mapping = {'0': (0, 0), '1': (1, 1), 'D': (1, 0), 'D_bar': (0, 1), 'X': (None, None)}
+        return mapping.get(v, (None, None))
+
+    @staticmethod
+    def _pair_to_logic(good, faulty):
+        if good is None or faulty is None: return 'X'
+        if good == 0 and faulty == 0: return '0'
+        if good == 1 and faulty == 1: return '1'
+        if good == 1 and faulty == 0: return 'D'
+        if good == 0 and faulty == 1: return 'D_bar'
+        return 'X'
+
+    @staticmethod
+    def _to_good_logic(v):
+        if v == 'D': return '1'
+        if v == 'D_bar': return '0'
+        return v
+
+    @staticmethod
+    def _eval_and(vals):
+        if 0 in vals: return 0
+        if None in vals: return None
+        return 1
+
+    @staticmethod
+    def _eval_or(vals):
+        if 1 in vals: return 1
+        if None in vals: return None
+        return 0
+
+    @staticmethod
+    def _eval_xor(vals):
+        if None in vals: return None
+        ones = sum(vals)
+        return 1 if (ones % 2) else 0
+
+    def _eval_binary_gate(self, gate_type, vals):
+        handlers = {
+            'AND': self._eval_and,
+            'OR': self._eval_or,
+            'NOT': lambda v: None if not v or v[0] is None else 1 - v[0],
+            'BUF': lambda v: None if not v else v[0],
+            'WIRE': lambda v: None if not v else v[0],
+            'XOR': self._eval_xor,
+            'XNOR': lambda v: None if self._eval_xor(v) is None else 1 - self._eval_xor(v),
+            'NAND': lambda v: None if self._eval_and(v) is None else 1 - self._eval_and(v),
+            'NOR': lambda v: None if self._eval_or(v) is None else 1 - self._eval_or(v),
+        }
+        handler = handlers.get(gate_type)
+        if handler is not None:
+            return handler(vals)
+        if len(vals) == 1:
+            return vals
+        return None
+
+    def _inject_fault_effect(self, node, logic_value):
+        if self.active_fault is None or node is not self.active_fault.node:
+            return logic_value
+        good, _faulty = self._logic_to_pair(logic_value)
+        if good is None:
+            return 'X'
+        forced_faulty = self.active_fault.stuck_at
+        return self._pair_to_logic(good, forced_faulty)
+
+    def _eval_gate_5val(self, node):
+        vals = [inp.value for inp in node.fanins]
+        if not vals and node.role == 'CONST':
+            return node.value
+
+        good_vals = []
+        faulty_vals = []
+        for v in vals:
+            g, f = self._logic_to_pair(v)
+            good_vals.append(g)
+            faulty_vals.append(f)
+
+        good_out = self._eval_binary_gate(node.type, good_vals)
+        faulty_out = self._eval_binary_gate(node.type, faulty_vals)
+        logic_out = self._pair_to_logic(good_out, faulty_out)
+        return self._inject_fault_effect(node, logic_out)
+
+    def _non_controlling_value(self, gate_type):
+        if gate_type in ('AND', 'NAND'): return '1'
+        if gate_type in ('OR', 'NOR'): return '0'
+        return 'X'  # XOR/XNOR lack absolute non-controlling definitions
+
+    def _get_d_frontier(self):
+        frontier = []
+        for node in self.circuit.nodes.values():
+            if node.role == 'CONST' or node.type in ('PI', 'WIRE'):
+                continue
+            if node.value == 'X':
+                in_vals = [inp.value for inp in node.fanins]
+                if any(v in ('D', 'D_bar') for v in in_vals):
+                    frontier.append(node)
+        # Sort by level (highest first) to accelerate fault delivery to POs
+        return sorted(frontier, key=lambda n: n.level, reverse=True)
+
+    def _is_justified(self, node):
+        if node.value in ('X', 'D', 'D_bar'):
+            return True # Fault injection naturally forces D states
+            
+        in_vals = [inp.value for inp in node.fanins]
+        if 'X' not in in_vals:
+            return True # Fully specified inputs are self-justifying
+
+        # Simulate worst-case scenario: map all unknowns to non-controlling values
+        simulated_vals = [v if v != 'X' else self._non_controlling_value(node.type) for v in in_vals]
+        if 'X' in simulated_vals:
+            return False # XOR/XNOR gates with unknowns cannot be guaranteed
+            
+        sim_good = []
+        for v in simulated_vals:
+            g, _ = self._logic_to_pair(v)
+            sim_good.append(g)
+            
+        sim_out = self._eval_binary_gate(node.type, sim_good)
+        logic_out = self._pair_to_logic(sim_out, sim_out)
+        
+        return logic_out == node.value
+
+    def _get_j_frontier(self):
+        frontier = []
+        for node in self.circuit.nodes.values():
+            if node.type in ('PI', 'WIRE', 'CONST'):
+                continue
+            if node.value in ('0', '1'):
+                if not self._is_justified(node):
+                    frontier.append(node)
+        # Sort by level (lowest first) to force justification towards Primary Inputs
+        return sorted(frontier, key=lambda n: n.level)
+
+    def _imply(self):
+        changed = True
+        while changed:
+            changed = False
+            for node in sorted(self.circuit.nodes.values(), key=lambda n: n.level):
+                # Phase 1: Forward Implication
+                if node.role not in ('PI', 'CONST'):
+                    new_val = self._eval_gate_5val(node)
+                    if new_val != 'X':
+                        if node.value == 'X':
+                            node.value = new_val
+                            changed = True
+                        elif node.value != new_val:
+                            return False # Structural D-intersection conflict
+
+                # Phase 2: Deterministic Backward Implication
+                if node.value != 'X' and node.type not in ('PI', 'WIRE', 'CONST'):
+                    target = node.value
+                    if node.type == 'NOT':
+                        req = self._invert_logic(target)
+                        if node.fanins[0].value == 'X':
+                            node.fanins[0].value = req
+                            changed = True
+                        elif node.fanins[0].value != req:
+                            return False
+                    elif node.type == 'BUF':
+                        if node.fanins[0].value == 'X':
+                            node.fanins[0].value = target
+                            changed = True
+                        elif node.fanins[0].value != target:
+                            return False
+                    elif self._gate_req_all_inputs(node.type, target):
+                        req_val = '1' if node.type in ('AND', 'NAND') else '0'
+                        if target in ('0', 'D_bar') and node.type in ('NAND', 'NOR'):
+                            req_val = '1' if node.type == 'NAND' else '0'
+                        for inp in node.fanins:
+                            if inp.value == 'X':
+                                inp.value = req_val
+                                changed = True
+                            elif inp.value != req_val and inp.value not in ('D', 'D_bar'):
+                                return False
+        return True
+
+    def _gate_req_all_inputs(self, gate_type, target_val):
+        if gate_type == 'AND' and target_val == '1': return True
+        if gate_type == 'NAND' and target_val == '0': return True
+        if gate_type == 'OR' and target_val == '0': return True
+        if gate_type == 'NOR' and target_val == '1': return True
+        return False
+
+    def _save_state(self):
+        return {n.name: n.value for n in self.circuit.nodes.values()}
+
+    def _restore_state(self, state):
+        for n in self.circuit.nodes.values():
+            n.value = state[n.name]
+
+    def _get_justification_choices(self, gate):
+        target = gate.value
+        choices = []
+        x_fanins = [inp for inp in gate.fanins if inp.value == 'X']
+        
+        if gate.type in ('AND', 'NAND'): c_val = '0'
+        elif gate.type in ('OR', 'NOR'): c_val = '1'
+        else:
+            choices.append({inp: '0' for inp in x_fanins})
+            choices.append({inp: '1' for inp in x_fanins})
+            return choices
+
+        requires_c_val = (target == '0' and gate.type in ('AND', 'OR')) or \
+                         (target == '1' and gate.type in ('NAND', 'NOR'))
+                         
+        if requires_c_val:
+            for inp in x_fanins:
+                choices.append({inp: c_val})
+        else:
+            nc_val = '1' if c_val == '0' else '0'
+            single_choice = {inp: nc_val for inp in x_fanins}
+            choices.append(single_choice)
+            
+        return choices
+
+    def _d_alg_recur(self):
+        if not self._imply():
+            return False
+
+        po_has_fault = any(po.value in ('D', 'D_bar') for po in self.circuit.POs)
+
+        if po_has_fault:
+            j_front = self._get_j_frontier()
+            if not j_front:
+                return True
+
+            gate = j_front[0]
+            choices = self._get_justification_choices(gate)
+            
+            for choice in choices:
+                state = self._save_state()
+                self.backtrack_count += 1
+                for node, val in choice.items():
+                    node.value = val
+                if self._d_alg_recur():
+                    return True
+                self._restore_state(state)
+            return False
+        else:
+            d_front = self._get_d_frontier()
+            if not d_front:
+                return False 
+
+            gate = d_front[0]
+            nc_val = self._non_controlling_value(gate.type)
+            
+            if nc_val != 'X':
+                state = self._save_state()
+                self.backtrack_count += 1
+                for inp in gate.fanins:
+                    if inp.value == 'X':
+                        inp.value = nc_val
+                if self._d_alg_recur():
+                    return True
+                self._restore_state(state)
+            else:
+                for v in ('0', '1'):
+                    state = self._save_state()
+                    self.backtrack_count += 1
+                    for inp in gate.fanins:
+                        if inp.value == 'X':
+                            inp.value = v
+                    if self._d_alg_recur():
+                        return True
+                    self._restore_state(state)
+            return False
+
     def solve_fault(self, fault):
-        # TODO: Real D implementation should fill vector/PO values.
-        #Implement the function here and if needed more functions, define and use them below this one, output format for D and PODEM is pre-written for final consistency
+    
+        self.active_fault = fault
         self.backtrack_count = 0
+
+        for node in self.circuit.nodes.values():
+            if node.role == 'CONST':
+                node.value = '1' if node.name.strip().lower() == "1'b1" else '0'
+            else:
+                node.value = 'X'
+
+        pdcf_val = 'D' if fault.stuck_at == 0 else 'D_bar'
+        fault.node.value = pdcf_val
+
+        detected = self._d_alg_recur()
+
+        test_vector = {pi.name: self._to_good_logic(pi.value) for pi in self.circuit.PIs}
+        po_values = {po.name: po.value for po in self.circuit.POs}
+
         return {
             "fault": f"{fault.node.name}/SA{fault.stuck_at}",
-            "detected": False,
-            "test_vector": {},
-            "po_values": {},
+            "detected": detected,
+            "test_vector": test_vector if detected else {},
+            "po_values": po_values if detected else {},
             "backtracks": self.backtrack_count,
         }
 
@@ -46,7 +336,7 @@ class DAlgorithmEngine:
 
         return {
             "algorithm": "D",
-            "status": "pending-implementation",
+            "status": "ok",
             "fault_count": fault_count,
             "detected_faults": detected_faults,
             "undetected_faults": fault_count - detected_faults,

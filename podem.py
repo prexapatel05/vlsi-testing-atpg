@@ -9,8 +9,9 @@ from netlist_graph import (
 
 
 class PODEMEngine:
-    def __init__(self, circuit):
+    def __init__(self, circuit, use_heuristics=True):
         self.circuit = circuit
+        self.use_heuristics = use_heuristics
         self.active_fault = None
         self.v_fault = None
         self.d_frontier = []
@@ -265,22 +266,32 @@ class PODEMEngine:
         if not self.d_frontier:
             return None
 
-        gate = min(self.d_frontier, key=lambda n: self._dist_to_po.get(n, float('inf')))
+        if self.use_heuristics:
+            gate = min(self.d_frontier, key=lambda n: self._dist_to_po.get(n, float('inf')))
+        else:
+            gate = self.d_frontier[0]
         x_fanins = [n for n in gate.fanins if n.value == 'X']
         if not x_fanins:
             return None
 
         req = self._non_controlling_value(gate.type)
         if req == 'X':
-            # XOR/XNOR has no strict non-controlling value; choose easier assignment.
-            candidate = min(
-                x_fanins,
-                key=lambda n: min(self._cc(n, '0'), self._cc(n, '1')),
-            )
-            val = '0' if self._cc(candidate, '0') <= self._cc(candidate, '1') else '1'
+            if self.use_heuristics:
+                # XOR/XNOR has no strict non-controlling value; choose easier assignment.
+                candidate = min(
+                    x_fanins,
+                    key=lambda n: min(self._cc(n, '0'), self._cc(n, '1')),
+                )
+                val = '0' if self._cc(candidate, '0') <= self._cc(candidate, '1') else '1'
+            else:
+                candidate = x_fanins[0]
+                val = '0'
             return (candidate, val)
 
-        target_input = min(x_fanins, key=lambda n: self._cc(n, req))
+        if self.use_heuristics:
+            target_input = min(x_fanins, key=lambda n: self._cc(n, req))
+        else:
+            target_input = x_fanins[0]
         return (target_input, req)
 
     def _choose_fanin_for_gate(self, node, internal_target):
@@ -288,6 +299,21 @@ class PODEMEngine:
         candidates = x_inputs if x_inputs else list(node.fanins)
         if not candidates:
             return None, internal_target
+
+        if not self.use_heuristics:
+            fin = candidates[0]
+            g = node.type
+            if g in ('AND', 'NAND'):
+                return fin, '0' if internal_target == '0' else '1'
+            if g in ('OR', 'NOR'):
+                return fin, '1' if internal_target == '1' else '0'
+            if g == 'NOT':
+                return fin, self._invert_logic(internal_target)
+            if g in ('BUF', 'WIRE'):
+                return fin, internal_target
+            if g in ('XOR', 'XNOR'):
+                return fin, '0'
+            return fin, internal_target
 
         g = node.type
 
