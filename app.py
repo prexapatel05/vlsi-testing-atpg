@@ -8,12 +8,14 @@ from time import perf_counter
 # Import ATPG engines
 sys.path.insert(0, os.path.dirname(__file__))
 from d import DAlgorithmEngine
+from d2 import DAlgorithmEngine as DExhaustiveAlgorithmEngine
 from podem import PODEMEngine
 from netlist_graph import (
     assign_default_inputs,
     generate_faults,
     levelize,
     parse_netlist,
+    simulate,
     simulate_event_driven,
 )
 
@@ -63,9 +65,37 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             max-width: 1240px;
             margin: 0 auto;
             display: grid;
-            grid-template-columns: 360px 1fr;
+            grid-template-columns: 300px 1fr;
             gap: 20px;
+            min-height: calc(100vh - 48px);
             animation: riseIn 500ms ease-out;
+        }
+
+        .shell > .panel,
+        .shell > .main {
+            max-height: calc(100vh - 48px);
+            overflow: visible;
+        }
+
+        .workspace-outputs {
+            max-width: 1240px;
+            margin: 20px auto 0;
+            display: grid;
+            gap: 20px;
+        }
+
+        .outputs-panel {
+            background: #ffffff;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 14px;
+            box-shadow: 0 10px 30px rgba(16, 36, 63, 0.08);
+        }
+
+        .outputs-panel h3 {
+            margin: 0 0 10px;
+            font-size: 16px;
+            color: var(--ink-soft);
         }
 
         .panel {
@@ -326,12 +356,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 14px;
             background: #ffffff;
             padding: 14px;
+            max-height: calc(100vh - 210px);
+            overflow-y: auto;
         }
 
         .dse-controls {
             display: grid;
             gap: 8px;
             margin-bottom: 10px;
+        }
+
+        .dse-metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+            padding: 6px 0;
+        }
+
+        .dse-block {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 12px;
+            margin-top: 10px;
+            background: #fffaf2;
         }
 
         .dse-metrics {
@@ -367,6 +414,60 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: #fffdf8;
         }
 
+        .dse-mini-charts {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            overflow-x: auto;
+            padding-bottom: 4px;
+        }
+
+        .dse-mini-charts .dse-chart {
+            min-width: 210px;
+            margin-top: 0;
+            flex: 0 0 210px;
+            padding: 8px;
+        }
+
+        .dse-mini-charts .dse-chart canvas {
+            width: 100%;
+        }
+
+        .vector-summary {
+            margin: 0 14px 14px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fff;
+            padding: 10px;
+        }
+
+        .vector-summary h4 {
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: var(--ink-soft);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .vector-list {
+            max-height: 160px;
+            overflow: auto;
+            border: 1px solid #ece8df;
+            border-radius: 8px;
+            background: #fffdf8;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 12px;
+        }
+
+        .vector-item {
+            padding: 6px 8px;
+            border-bottom: 1px solid #ece8df;
+        }
+
+        .vector-item:last-child {
+            border-bottom: 0;
+        }
+
         @keyframes riseIn {
             from {
                 opacity: 0;
@@ -397,6 +498,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         @media (max-width: 980px) {
             .shell {
                 grid-template-columns: 1fr;
+                min-height: auto;
+            }
+
+            .dse-panel {
+                max-height: none;
+                overflow: visible;
             }
         }
     </style>
@@ -432,6 +539,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         <input type="checkbox" id="algoPODEM" checked value="PODEM" />
                         <span>PODEM</span>
                     </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-weight: 400; text-transform: none; margin: 0; color: #10243f; cursor: pointer;">
+                        <input type="checkbox" id="algoDExhaustive" value="D_EXHAUSTIVE" />
+                        <span>D_EXHAUSTIVE</span>
+                    </label>
                 </div>
 
                 <div class="btn-row" style="margin-top: 14px;">
@@ -450,51 +561,130 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             <section class="dse-panel">
                 <h2 style="margin: 0 0 6px 0; font-size: 18px;">Design Space Exploration (DSE)</h2>
-                <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compare D, original PODEM (SCOAP-like), and PODEM no-heuristic baseline with table + bar charts.</p>
-                <div class="dse-controls">
-                    <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-weight:500; color:#10243f;">
-                        <input type="checkbox" id="dseCompareHeur" checked />
-                        <span>Include PODEM no-heuristic baseline comparison</span>
-                    </label>
-                    <div class="dse-metrics">
-                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricCoverage" checked />Coverage</label>
-                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricTime" checked />Time</label>
-                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricBacktracks" checked />Backtracks</label>
-                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricMemory" checked />Memory</label>
-                    </div>
-                    <div class="btn-row" style="margin-top: 4px;">
-                        <button class="btn-soft" id="runDseBtn" onclick="runDSE()">Run DSE</button>
-                    </div>
-                </div>
-                <div id="dseResults" class="results">
-                    <div class="empty">Run DSE to view comparisons and charts.</div>
-                </div>
-            </section>
+                <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Use DSE to compare ATPG tradeoffs across netlists across three dedicated comparisons.</p>
 
-            <section id="results" class="results">
-                <div class="empty">Select a netlist and click Run ATPG.</div>
+                <div class="dse-controls">
+                    <strong style="font-size: 12px; color: #365274; letter-spacing: 0.04em; text-transform: uppercase;">Metrics To Compare</strong>
+                    <div class="dse-metrics-grid">
+                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricCoverage" checked />Coverage (%)</label>
+                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricTime" checked />Time (ms)</label>
+                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricBacktracks" checked />Backtracks</label>
+                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricMemory" checked />Peak Memory (KB)</label>
+                        <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricTestVectors" checked />Final Test Vectors</label>
+                    </div>
+                </div>
+
+                <div class="dse-block">
+                    <h3 style="margin: 0 0 6px 0; font-size: 16px;">DSE #1: D vs PODEM</h3>
+                    <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compares baseline D engine directly against heuristic-enabled PODEM.</p>
+                    <div class="btn-row" style="margin-top: 4px; margin-bottom: 8px;">
+                        <button class="btn-soft" id="runDseBtn" onclick="runDSE()">Run DSE #1</button>
+                    </div>
+                    <p style="margin: 0; color: #365274; font-size: 12px;">Output appears below the first screen in the unified results area.</p>
+                </div>
+
+                <div class="dse-block">
+                    <h3 style="margin: 0 0 6px 0; font-size: 16px;">DSE #2: PODEM vs PODEM_NO_HEUR</h3>
+                    <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compares heuristic-enabled PODEM against the non-heuristic PODEM baseline.</p>
+                    <div class="btn-row" style="margin-top: 4px; margin-bottom: 8px;">
+                        <button class="btn-soft" id="runDsePodemVariantsBtn" onclick="runDsePodemVariants()">Run DSE #2</button>
+                    </div>
+                    <p style="margin: 0; color: #365274; font-size: 12px;">Output appears below the first screen in the unified results area.</p>
+                </div>
+
+                <div class="dse-block">
+                    <h3 style="margin: 0 0 6px 0; font-size: 16px;">DSE #3: D vs D_EXHAUSTIVE</h3>
+                    <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compares baseline D engine from d.py against D_EXHAUSTIVE from d2.py.</p>
+                    <div class="btn-row" style="margin-top: 4px; margin-bottom: 8px;">
+                        <button class="btn-soft" id="runDseDVariantsBtn" onclick="runDseDVariants()">Run DSE #3</button>
+                    </div>
+                    <p style="margin: 0; color: #365274; font-size: 12px;">Output appears below the first screen in the unified results area.</p>
+                </div>
+
+                <div class="dse-block">
+                    <h3 style="margin: 0 0 6px 0; font-size: 16px;">DSE #4: SIMULATE vs EVENT_DRIVEN</h3>
+                    <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compares levelized simulate() and event-driven simulate_event_driven() kernels in Basic flow.</p>
+                    <div class="btn-row" style="margin-top: 4px; margin-bottom: 8px;">
+                        <button class="btn-soft" id="runDseSimKernelsBtn" onclick="runDseSimKernels()">Run DSE #4</button>
+                    </div>
+                    <p style="margin: 0; color: #365274; font-size: 12px;">Output appears below the first screen in the unified results area.</p>
+                </div>
             </section>
         </main>
     </div>
+
+    <section class="workspace-outputs">
+        <div class="outputs-panel">
+            <h3>ATPG Run Output</h3>
+            <section id="results" class="results">
+                <div class="empty">Select a netlist and click Run ATPG.</div>
+            </section>
+        </div>
+
+        <div class="outputs-panel">
+            <h3>DSE #1 Output (D vs PODEM)</h3>
+            <section id="dseResultsPrimary" class="results">
+                <div class="empty">Run DSE #1 to compare D and PODEM variants.</div>
+            </section>
+        </div>
+
+        <div class="outputs-panel">
+            <h3>DSE #2 Output (PODEM vs PODEM_NO_HEUR)</h3>
+            <section id="dseResultsPodemVariants" class="results">
+                <div class="empty">Run DSE #2 to compare PODEM and PODEM_NO_HEUR.</div>
+            </section>
+        </div>
+
+        <div class="outputs-panel">
+            <h3>DSE #3 Output (D vs D_EXHAUSTIVE)</h3>
+            <section id="dseResultsDVariants" class="results">
+                <div class="empty">Run DSE #3 to compare D and D_EXHAUSTIVE.</div>
+            </section>
+        </div>
+
+        <div class="outputs-panel">
+            <h3>DSE #4 Output (SIMULATE vs EVENT_DRIVEN)</h3>
+            <section id="dseResultsSimKernels" class="results">
+                <div class="empty">Run DSE #4 to compare simulate() and simulate_event_driven().</div>
+            </section>
+        </div>
+    </section>
 
     <script>
         const netlistsContainer = document.getElementById('netlistsContainer');
         const algoBasic = document.getElementById('algoBasic');
         const algoD = document.getElementById('algoD');
         const algoPODEM = document.getElementById('algoPODEM');
+        const algoDExhaustive = document.getElementById('algoDExhaustive');
         const runBtn = document.getElementById('runBtn');
         const runDseBtn = document.getElementById('runDseBtn');
-        const dseCompareHeur = document.getElementById('dseCompareHeur');
+        const runDsePodemVariantsBtn = document.getElementById('runDsePodemVariantsBtn');
+        const runDseDVariantsBtn = document.getElementById('runDseDVariantsBtn');
+        const runDseSimKernelsBtn = document.getElementById('runDseSimKernelsBtn');
         const metricCoverage = document.getElementById('metricCoverage');
         const metricTime = document.getElementById('metricTime');
         const metricBacktracks = document.getElementById('metricBacktracks');
         const metricMemory = document.getElementById('metricMemory');
+        const metricTestVectors = document.getElementById('metricTestVectors');
         const status = document.getElementById('status');
         const results = document.getElementById('results');
-        const dseResults = document.getElementById('dseResults');
+        const dseResultsPrimary = document.getElementById('dseResultsPrimary');
+        const dseResultsPodemVariants = document.getElementById('dseResultsPodemVariants');
+        const dseResultsDVariants = document.getElementById('dseResultsDVariants');
+        const dseResultsSimKernels = document.getElementById('dseResultsSimKernels');
 
         function getSelectedNetlists() {
             return Array.from(document.querySelectorAll('.netlist-cb:checked')).map(cb => cb.value);
+        }
+
+        function getSelectedMetrics() {
+            const selectedMetrics = [];
+            if (metricCoverage.checked) selectedMetrics.push('coverage');
+            if (metricTime.checked) selectedMetrics.push('time');
+            if (metricBacktracks.checked) selectedMetrics.push('backtracks');
+            if (metricMemory.checked) selectedMetrics.push('memory');
+            if (metricTestVectors.checked) selectedMetrics.push('test_vectors');
+            return selectedMetrics;
         }
 
         async function loadNetlists() {
@@ -529,6 +719,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (algoBasic.checked) selectedAlgos.push('BASIC');
             if (algoD.checked) selectedAlgos.push('D');
             if (algoPODEM.checked) selectedAlgos.push('PODEM');
+            if (algoDExhaustive.checked) selectedAlgos.push('D_EXHAUSTIVE');
 
             if (selectedNetlists.length === 0) {
                 status.textContent = 'Please select at least one netlist.';
@@ -589,17 +780,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            const selectedMetrics = [];
-            if (metricCoverage.checked) selectedMetrics.push('coverage');
-            if (metricTime.checked) selectedMetrics.push('time');
-            if (metricBacktracks.checked) selectedMetrics.push('backtracks');
-            if (metricMemory.checked) selectedMetrics.push('memory');
+            const selectedMetrics = getSelectedMetrics();
+            if (selectedMetrics.length === 0) {
+                status.textContent = 'Select at least one metric for DSE.';
+                status.classList.add('error');
+                return;
+            }
 
             runDseBtn.disabled = true;
-            status.textContent = `Running DSE on ${selectedNetlists.length} netlist(s)...`;
+            status.textContent = `Running DSE #1 on ${selectedNetlists.length} netlist(s)...`;
             status.classList.add('running');
             status.classList.remove('error');
-            dseResults.innerHTML = '';
+            dseResultsPrimary.innerHTML = '';
 
             try {
                 const resp = await fetch('/api/dse', {
@@ -607,7 +799,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         netlists: selectedNetlists,
-                        compare_heuristics: dseCompareHeur.checked,
                         metrics: selectedMetrics,
                     })
                 });
@@ -620,21 +811,226 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (data.error) {
                     status.textContent = 'DSE error: ' + data.error;
                     status.classList.add('error');
-                    dseResults.innerHTML = '<div class="empty">' + data.error + '</div>';
+                    dseResultsPrimary.innerHTML = '<div class="empty">' + data.error + '</div>';
                     return;
                 }
 
-                status.textContent = `DSE complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.textContent = `DSE #1 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
                 status.classList.remove('running', 'error');
                 status.classList.add('success');
-                renderDseResults(data.comparisons || [], selectedMetrics);
+                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsPrimary, 'DSE #1', 'podem');
             } catch (err) {
                 status.textContent = 'DSE failed: ' + err.message;
                 status.classList.add('error');
-                dseResults.innerHTML = '<div class="empty">' + err.message + '</div>';
+                dseResultsPrimary.innerHTML = '<div class="empty">' + err.message + '</div>';
             } finally {
                 runDseBtn.disabled = false;
             }
+        }
+
+        async function runDsePodemVariants() {
+            const selectedNetlists = getSelectedNetlists();
+            if (selectedNetlists.length === 0) {
+                status.textContent = 'Please select at least one netlist for DSE #2.';
+                status.classList.add('error');
+                return;
+            }
+
+            const selectedMetrics = getSelectedMetrics();
+            if (selectedMetrics.length === 0) {
+                status.textContent = 'Select at least one metric for DSE #2.';
+                status.classList.add('error');
+                return;
+            }
+
+            runDsePodemVariantsBtn.disabled = true;
+            status.textContent = `Running DSE #2 on ${selectedNetlists.length} netlist(s)...`;
+            status.classList.add('running');
+            status.classList.remove('error');
+            dseResultsPodemVariants.innerHTML = '';
+
+            try {
+                const resp = await fetch('/api/dse-podem-variants', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        netlists: selectedNetlists,
+                        metrics: selectedMetrics,
+                    })
+                });
+
+                if (!resp.ok) {
+                    throw new Error('Server error: ' + resp.status);
+                }
+
+                const data = await resp.json();
+                if (data.error) {
+                    status.textContent = 'DSE #2 error: ' + data.error;
+                    status.classList.add('error');
+                    dseResultsPodemVariants.innerHTML = '<div class="empty">' + data.error + '</div>';
+                    return;
+                }
+
+                status.textContent = `DSE #2 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.classList.remove('running', 'error');
+                status.classList.add('success');
+                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsPodemVariants, 'DSE #2', 'podem_variants');
+            } catch (err) {
+                status.textContent = 'DSE #2 failed: ' + err.message;
+                status.classList.add('error');
+                dseResultsPodemVariants.innerHTML = '<div class="empty">' + err.message + '</div>';
+            } finally {
+                runDsePodemVariantsBtn.disabled = false;
+            }
+        }
+
+        async function runDseDVariants() {
+            const selectedNetlists = getSelectedNetlists();
+            if (selectedNetlists.length === 0) {
+                status.textContent = 'Please select at least one netlist for DSE #2.';
+                status.classList.add('error');
+                return;
+            }
+
+            const selectedMetrics = getSelectedMetrics();
+            if (selectedMetrics.length === 0) {
+                status.textContent = 'Select at least one metric for DSE #2.';
+                status.classList.add('error');
+                return;
+            }
+
+            runDseDVariantsBtn.disabled = true;
+            status.textContent = `Running DSE #3 on ${selectedNetlists.length} netlist(s)...`;
+            status.classList.add('running');
+            status.classList.remove('error');
+            dseResultsDVariants.innerHTML = '';
+
+            try {
+                const resp = await fetch('/api/dse-d-variants', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        netlists: selectedNetlists,
+                        metrics: selectedMetrics,
+                    })
+                });
+
+                if (!resp.ok) {
+                    throw new Error('Server error: ' + resp.status);
+                }
+
+                const data = await resp.json();
+                if (data.error) {
+                    status.textContent = 'DSE #3 error: ' + data.error;
+                    status.classList.add('error');
+                    dseResultsDVariants.innerHTML = '<div class="empty">' + data.error + '</div>';
+                    return;
+                }
+
+                status.textContent = `DSE #3 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.classList.remove('running', 'error');
+                status.classList.add('success');
+                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsDVariants, 'DSE #3', 'd_variants');
+            } catch (err) {
+                status.textContent = 'DSE #3 failed: ' + err.message;
+                status.classList.add('error');
+                dseResultsDVariants.innerHTML = '<div class="empty">' + err.message + '</div>';
+            } finally {
+                runDseDVariantsBtn.disabled = false;
+            }
+        }
+
+        async function runDseSimKernels() {
+            const selectedNetlists = getSelectedNetlists();
+            if (selectedNetlists.length === 0) {
+                status.textContent = 'Please select at least one netlist for DSE #4.';
+                status.classList.add('error');
+                return;
+            }
+
+            const selectedMetrics = getSelectedMetrics();
+            const dse4Metrics = selectedMetrics.filter(m => m === 'time' || m === 'memory');
+            if (dse4Metrics.length === 0) {
+                status.textContent = 'DSE #4 supports Time and Peak Memory metrics only. Select at least one.';
+                status.classList.add('error');
+                return;
+            }
+
+            runDseSimKernelsBtn.disabled = true;
+            status.textContent = `Running DSE #4 on ${selectedNetlists.length} netlist(s)...`;
+            status.classList.add('running');
+            status.classList.remove('error');
+            dseResultsSimKernels.innerHTML = '';
+
+            try {
+                const resp = await fetch('/api/dse-sim-kernels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        netlists: selectedNetlists,
+                        metrics: dse4Metrics,
+                    })
+                });
+
+                if (!resp.ok) {
+                    throw new Error('Server error: ' + resp.status);
+                }
+
+                const data = await resp.json();
+                if (data.error) {
+                    status.textContent = 'DSE #4 error: ' + data.error;
+                    status.classList.add('error');
+                    dseResultsSimKernels.innerHTML = '<div class="empty">' + data.error + '</div>';
+                    return;
+                }
+
+                status.textContent = `DSE #4 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.classList.remove('running', 'error');
+                status.classList.add('success');
+                renderDseResults(data.comparisons || [], dse4Metrics, dseResultsSimKernels, 'DSE #4', 'sim_kernels');
+            } catch (err) {
+                status.textContent = 'DSE #4 failed: ' + err.message;
+                status.classList.add('error');
+                dseResultsSimKernels.innerHTML = '<div class="empty">' + err.message + '</div>';
+            } finally {
+                runDseSimKernelsBtn.disabled = false;
+            }
+        }
+
+        function formatVectorLine(vec, piOrder) {
+            const order = (piOrder && piOrder.length) ? piOrder : Object.keys(vec || {}).sort();
+            if (!order.length) return 'No vector values';
+            return order.map(pi => `${pi}=${(vec || {})[pi] ?? 'X'}`).join(', ');
+        }
+
+        function renderVectorSummary(summary, title) {
+            const s = summary || { vector_count: 0, pi_order: [], unique_vector_list: [] };
+            const vectors = s.unique_vector_list || [];
+            const lines = vectors.length
+                ? vectors.map(v => `<div class="vector-item">${formatVectorLine(v, s.pi_order || [])}</div>`).join('')
+                : '<div class="vector-item">No detected vectors.</div>';
+
+            return `
+                <div class="vector-summary">
+                    <h4>${title}</h4>
+                    <div style="margin-bottom: 8px; font-size: 13px; color: #365274;">Count: <strong>${s.vector_count || 0}</strong></div>
+                    <div class="vector-list">${lines}</div>
+                </div>
+            `;
+        }
+
+        function renderDetectedFaultSummary(items, title) {
+            const list = items || [];
+            const inner = list.length
+                ? list.map(item => `<div class="fault-item">${item}</div>`).join('')
+                : '<div class="fault-item">No detected faults.</div>';
+
+            return `
+                <details style="padding: 0 14px 14px;">
+                    <summary>${title} (${list.length})</summary>
+                    <div class="faults">${inner}</div>
+                </details>
+            `;
         }
 
         function renderResults(resultList) {
@@ -644,7 +1040,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
 
             const chunks = resultList.map(res => {
-                const badgeClass = res.algorithm === 'D' ? 'badge-d' : (res.algorithm === 'PODEM' ? 'badge-podem' : 'badge-run');
+                const badgeClass = res.algorithm === 'D'
+                    ? 'badge-d'
+                    : (res.algorithm === 'PODEM' ? 'badge-podem' : 'badge-run');
                 const statHtml = Object.entries(res.stats || {})
                     .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`)
                     .join('');
@@ -652,6 +1050,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const faultsHtml = faults.length
                     ? faults.map(f => `<div class="fault-item">${f}</div>`).join('')
                     : '<div class="fault-item">No per-fault lines.</div>';
+                const showAdvancedSections = !res.hide_vector_sections;
+                const advancedSectionsHtml = showAdvancedSections
+                    ? `${renderVectorSummary(res.final_vector_summary, 'Final Test Vector Set')}${renderDetectedFaultSummary(res.detected_faults || [], 'Detected Per-Fault List')}`
+                    : '';
+                const detailTitle = res.algorithm === 'BASIC' ? 'Simulation details' : 'Per-fault details';
 
                 return `
                     <article class="result-card">
@@ -660,8 +1063,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <span class="badge ${badgeClass}">${res.algorithm}</span>
                         </div>
                         <div class="stats">${statHtml}</div>
+                        ${advancedSectionsHtml}
                         <details>
-                            <summary>Per-fault details (${faults.length})</summary>
+                            <summary>${detailTitle} (${faults.length})</summary>
                             <div class="faults">${faultsHtml}</div>
                         </details>
                     </article>
@@ -671,9 +1075,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             results.innerHTML = chunks.join('');
         }
 
-        function renderDseResults(comparisons, selectedMetrics) {
+        function renderDseResults(comparisons, selectedMetrics, targetElement, dseLabel, overlapMode) {
             if (!comparisons || comparisons.length === 0) {
-                dseResults.innerHTML = '<div class="empty">No DSE comparison data.</div>';
+                targetElement.innerHTML = '<div class="empty">No DSE comparison data.</div>';
                 return;
             }
 
@@ -682,6 +1086,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 time: 'Time (ms)',
                 backtracks: 'Total Backtracks',
                 memory: 'Peak Memory (KB)',
+                test_vectors: 'Final Test Vectors',
             };
 
             const cards = comparisons.map((cmp, idx) => {
@@ -691,20 +1096,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     const vals = algos.map(a => {
                         const v = a.metrics[metric];
                         if (v === null || v === undefined) return 'N/A';
-                        if (typeof v === 'number') return v.toFixed(metric === 'coverage' ? 2 : 3);
-                        return v;
+                        if (typeof v !== 'number') return String(v);
+                        if (metric === 'coverage') return v.toFixed(2);
+                        if (metric === 'test_vectors' || metric === 'backtracks') return String(Math.round(v));
+                        return v.toFixed(3);
                     }).map(v => `<td>${v}</td>`).join('');
                     return `<tr><td>${metricLabels[metric] || metric}</td>${vals}</tr>`;
                 }).join('');
 
                 const overlap = cmp.fault_overlap || {};
-                const overlapText = `Both detected: ${overlap.both_detected || 0}, D-only: ${overlap.d_only || 0}, PODEM-only: ${overlap.podem_only || 0}`;
+                let overlapText = `Both detected: ${overlap.both_detected || 0}`;
+                if (overlapMode === 'd_variants') {
+                    overlapText = `${overlapText}, D-only: ${overlap.d_only || 0}, D_EXHAUSTIVE-only: ${overlap.d_exhaustive_only || 0}`;
+                } else if (overlapMode === 'podem_variants') {
+                    overlapText = `${overlapText}, PODEM-only: ${overlap.podem_only || 0}, PODEM_NO_HEUR-only: ${overlap.podem_no_heur_only || 0}`;
+                } else if (overlapMode === 'sim_kernels') {
+                    const matches = overlap.po_matches || 0;
+                    const total = overlap.po_total || 0;
+                    const mismatches = overlap.po_mismatches || 0;
+                    overlapText = `PO matches: ${matches}/${total}, mismatches: ${mismatches}`;
+                } else {
+                    overlapText = `${overlapText}, D-only: ${overlap.d_only || 0}, PODEM-only: ${overlap.podem_only || 0}`;
+                }
+
+                const vectorBlocks = algos.map(a => {
+                    return `
+                        ${renderVectorSummary(a.final_vector_summary, `${a.label} Final Vectors`)}
+                        ${renderDetectedFaultSummary(a.detected_faults || [], `${a.label} Detected Per-Fault List`)}
+                    `;
+                }).join('');
+
+                const chartCanvases = selectedMetrics.map(metric => {
+                    const id = `${targetElement.id}_chart_${idx}_${metric}`;
+                    return `<div class="dse-chart"><canvas id="${id}" height="120"></canvas></div>`;
+                }).join('');
 
                 return `
                     <article class="result-card">
                         <div class="result-head">
                             <strong>${cmp.netlist}</strong>
-                            <span class="badge badge-run">DSE</span>
+                            <span class="badge badge-run">${dseLabel}</span>
                         </div>
                         <div style="padding: 12px; color: #365274; font-size: 13px;">${overlapText}</div>
                         <div style="padding: 0 12px 12px 12px; overflow-x:auto;">
@@ -713,19 +1144,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 <tbody>${rows}</tbody>
                             </table>
                         </div>
-                        <div class="dse-chart">
-                            <canvas id="dseChart_${idx}" height="160"></canvas>
-                        </div>
+                        <div class="dse-mini-charts" style="padding: 0 12px 12px 12px;">${chartCanvases}</div>
+                        <div style="display:grid; gap:10px; padding-bottom: 8px;">${vectorBlocks}</div>
                     </article>
                 `;
             });
 
-            dseResults.innerHTML = cards.join('');
+            targetElement.innerHTML = cards.join('');
 
-            comparisons.forEach((cmp, idx) => drawDseChart(`dseChart_${idx}`, cmp, selectedMetrics));
+            comparisons.forEach((cmp, idx) => {
+                selectedMetrics.forEach(metric => {
+                    drawDseChart(`${targetElement.id}_chart_${idx}_${metric}`, cmp, metric);
+                });
+            });
         }
 
-        function drawDseChart(canvasId, comparison, selectedMetrics) {
+        function drawDseChart(canvasId, comparison, metric) {
             const canvas = document.getElementById(canvasId);
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
@@ -734,32 +1168,37 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             ctx.clearRect(0, 0, width, height);
 
             const algos = comparison.algorithms || [];
-            if (!algos.length || !selectedMetrics.length) return;
+            if (!algos.length) return;
 
-            const metric = selectedMetrics[0];
             const values = algos.map(a => Number(a.metrics[metric] || 0));
             const maxVal = Math.max(...values, 1);
-            const barW = Math.max(24, Math.floor((width - 40) / Math.max(values.length, 1) - 10));
+            const barW = Math.max(26, Math.floor((width - 40) / Math.max(values.length, 1) - 10));
             const gap = 10;
             const colors = ['#0f766e', '#b91c1c', '#1d4ed8', '#7c3aed'];
+            const metricTitle = {
+                coverage: 'Coverage (%)',
+                time: 'Time (ms)',
+                backtracks: 'Backtracks',
+                memory: 'Peak Memory (KB)',
+                test_vectors: 'Final Test Vectors',
+            };
 
             ctx.font = '12px Space Grotesk';
             ctx.fillStyle = '#365274';
-            ctx.fillText(`Bar chart metric: ${metric}`, 10, 16);
+            ctx.fillText(`Metric: ${metricTitle[metric] || metric}`, 10, 16);
 
             values.forEach((v, i) => {
-                const h = Math.round((v / maxVal) * (height - 55));
+                const h = Math.round((v / maxVal) * (height - 58));
                 const x = 20 + i * (barW + gap);
-                const y = height - 25 - h;
+                const y = height - 28 - h;
                 ctx.fillStyle = colors[i % colors.length];
                 ctx.fillRect(x, y, barW, h);
                 ctx.fillStyle = '#10243f';
-                ctx.fillText(String(v.toFixed(metric === 'coverage' ? 2 : 1)), x, y - 5);
-                ctx.save();
-                ctx.translate(x + 4, height - 6);
-                ctx.rotate(-0.25);
-                ctx.fillText(algos[i].label, 0, 0);
-                ctx.restore();
+                const valueText = (metric === 'backtracks' || metric === 'test_vectors')
+                    ? String(Math.round(v))
+                    : String(v.toFixed(metric === 'coverage' ? 2 : 1));
+                ctx.fillText(valueText, x, y - 5);
+                ctx.fillText(algos[i].label, x, height - 8);
             });
         }
 
@@ -823,6 +1262,7 @@ def run_atpg():
                             'node_count': len(circuit.nodes),
                             'pi_count': len(circuit.PIs),
                             'po_count': len(circuit.POs),
+                            'pi_values': {pi.name: pi.value for pi in circuit.PIs},
                             'po_values': {po.name: po.value for po in circuit.POs},
                             'fault_count': len(generate_faults(circuit)),
                         }
@@ -831,6 +1271,10 @@ def run_atpg():
                         engine = DAlgorithmEngine(circuit)
                         result_data = engine.run()
                         results.append(format_result(result_data, 'D', netlist_name))
+                    elif algo in ('D_EXHAUSTIVE', 'D2'):
+                        engine = DExhaustiveAlgorithmEngine(circuit)
+                        result_data = engine.run()
+                        results.append(format_result(result_data, 'D_EXHAUSTIVE', netlist_name))
                     elif algo == 'PODEM':
                         engine = PODEMEngine(circuit)
                         result_data = engine.run()
@@ -856,7 +1300,77 @@ def _run_engine_with_memory(engine):
     return result
 
 
+def _canonicalize_vector(vector, pi_order):
+    return tuple(vector.get(pi, 'X') for pi in pi_order)
+
+
+def _is_all_x_vector(vector):
+    if not isinstance(vector, dict) or not vector:
+        return False
+    return all(v == 'X' for v in vector.values())
+
+
+def _build_final_vector_summary(result_data):
+    detected_vectors = []
+    excluded_all_x_count = 0
+    for row in result_data.get('results', []):
+        if row.get('detected', False):
+            vec = row.get('test_vector', {}) or {}
+            if isinstance(vec, dict):
+                if _is_all_x_vector(vec):
+                    excluded_all_x_count += 1
+                    continue
+                detected_vectors.append(vec)
+
+    if not detected_vectors:
+        return {
+            'vector_count': 0,
+            'pi_order': [],
+            'unique_vector_list': [],
+            'excluded_all_x_count': excluded_all_x_count,
+        }
+
+    pi_order = sorted({pi for vec in detected_vectors for pi in vec.keys()})
+    seen = set()
+    unique = []
+
+    for vec in detected_vectors:
+        signature = _canonicalize_vector(vec, pi_order)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        unique.append({pi: vec.get(pi, 'X') for pi in pi_order})
+
+    return {
+        'vector_count': len(unique),
+        'pi_order': pi_order,
+        'unique_vector_list': unique,
+        'excluded_all_x_count': excluded_all_x_count,
+    }
+
+
+def _format_fault_line(entry):
+    return (
+        f"- Fault {entry.get('fault')} | vector={entry.get('test_vector', {})} "
+        f"| detected={entry.get('detected', False)} "
+        f"| po={entry.get('po_values', {})} "
+        f"| backtracks={entry.get('backtracks', 0)} "
+        f"| time_us={entry.get('elapsed_us', 0):.3f}"
+    )
+
+
+def _detected_fault_lines(result_data, concrete_only=False):
+    return [
+        _format_fault_line(row)
+        for row in result_data.get('results', [])
+        if row.get('detected', False)
+        and (not concrete_only or not _is_all_x_vector(row.get('test_vector', {}) or {}))
+    ]
+
+
 def _dse_algo_metrics(label, result_data):
+    final_vectors = _build_final_vector_summary(result_data)
+    detected_faults = _detected_fault_lines(result_data, concrete_only=True)
     return {
         'key': label,
         'label': label,
@@ -865,6 +1379,7 @@ def _dse_algo_metrics(label, result_data):
             'time': float(result_data.get('total_time_ms', result_data.get('_wall_time_ms', 0.0))),
             'backtracks': float(result_data.get('total_backtracks', 0)),
             'memory': float(result_data.get('_memory_peak_bytes', 0)) / 1024.0,
+            'test_vectors': float(final_vectors.get('vector_count', 0)),
         },
         'summary': {
             'status': result_data.get('status', 'ok'),
@@ -872,6 +1387,8 @@ def _dse_algo_metrics(label, result_data):
             'detected': result_data.get('detected_faults', 0),
             'undetected': result_data.get('undetected_faults', 0),
         },
+        'final_vector_summary': final_vectors,
+        'detected_faults': detected_faults,
     }
 
 
@@ -883,13 +1400,31 @@ def _detected_fault_set(result_data):
     }
 
 
+def _run_simulation_kernel_with_memory(circuit, kernel):
+    tracemalloc.start()
+    t0 = perf_counter()
+    if kernel == 'simulate':
+        simulate(circuit)
+    else:
+        simulate_event_driven(circuit)
+    wall_ms = (perf_counter() - t0) * 1000.0
+    _cur, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    po_values = {po.name: po.value for po in circuit.POs}
+    return {
+        '_wall_time_ms': wall_ms,
+        '_memory_peak_bytes': peak,
+        'po_values': po_values,
+    }
+
+
 @app.route('/api/dse', methods=['POST'])
 def run_dse():
-    """Run Design Space Exploration comparing D and PODEM variants."""
+    """Run DSE #1: compare D and heuristic-enabled PODEM."""
     try:
         payload = request.json or {}
         netlist_names = payload.get('netlists', [])
-        compare_heuristics = bool(payload.get('compare_heuristics', True))
 
         if not netlist_names or not isinstance(netlist_names, list):
             return jsonify({'error': 'netlists array required'}), 400
@@ -906,10 +1441,6 @@ def run_dse():
                 })
                 continue
 
-            d_result = None
-            podem_result = None
-            podem_no_heur_result = None
-
             circuit = parse_netlist(str(netlist_path))
             levelize(circuit)
             d_result = _run_engine_with_memory(DAlgorithmEngine(circuit))
@@ -918,17 +1449,10 @@ def run_dse():
             levelize(circuit)
             podem_result = _run_engine_with_memory(PODEMEngine(circuit, use_heuristics=True))
 
-            if compare_heuristics:
-                circuit = parse_netlist(str(netlist_path))
-                levelize(circuit)
-                podem_no_heur_result = _run_engine_with_memory(PODEMEngine(circuit, use_heuristics=False))
-
             algo_rows = [
                 _dse_algo_metrics('D', d_result),
                 _dse_algo_metrics('PODEM', podem_result),
             ]
-            if podem_no_heur_result is not None:
-                algo_rows.append(_dse_algo_metrics('PODEM_NO_HEUR', podem_no_heur_result))
 
             # Compare D against original PODEM (heuristic-enabled).
             podem_ref = podem_result
@@ -952,8 +1476,224 @@ def run_dse():
     except Exception as e:
         return jsonify({'error': f'Internal error: {str(e)}'}), 500
 
+
+@app.route('/api/dse-podem-variants', methods=['POST'])
+def run_dse_podem_variants():
+    """Run DSE #2: compare PODEM and PODEM_NO_HEUR."""
+    try:
+        payload = request.json or {}
+        netlist_names = payload.get('netlists', [])
+
+        if not netlist_names or not isinstance(netlist_names, list):
+            return jsonify({'error': 'netlists array required'}), 400
+
+        comparisons = []
+
+        for netlist_name in netlist_names:
+            name = str(netlist_name).strip()
+            netlist_path = NETLISTS_FOLDER / name
+            if not netlist_path.exists():
+                comparisons.append({
+                    'netlist': name,
+                    'error': f'Netlist not found: {name}',
+                })
+                continue
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            podem_result = _run_engine_with_memory(PODEMEngine(circuit, use_heuristics=True))
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            podem_no_heur_result = _run_engine_with_memory(PODEMEngine(circuit, use_heuristics=False))
+
+            p_set = _detected_fault_set(podem_result)
+            p0_set = _detected_fault_set(podem_no_heur_result)
+
+            comparisons.append({
+                'netlist': name,
+                'algorithms': [
+                    _dse_algo_metrics('PODEM', podem_result),
+                    _dse_algo_metrics('PODEM_NO_HEUR', podem_no_heur_result),
+                ],
+                'fault_overlap': {
+                    'both_detected': len(p_set & p0_set),
+                    'podem_only': len(p_set - p0_set),
+                    'podem_no_heur_only': len(p0_set - p_set),
+                },
+            })
+
+        return jsonify({
+            'status': 'ok',
+            'comparisons': comparisons,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Internal error: {str(e)}'}), 500
+
+
+@app.route('/api/dse-d-variants', methods=['POST'])
+def run_dse_d_variants():
+    """Run Design Space Exploration comparing D and D_EXHAUSTIVE (d2.py)."""
+    try:
+        payload = request.json or {}
+        netlist_names = payload.get('netlists', [])
+
+        if not netlist_names or not isinstance(netlist_names, list):
+            return jsonify({'error': 'netlists array required'}), 400
+
+        comparisons = []
+
+        for netlist_name in netlist_names:
+            name = str(netlist_name).strip()
+            netlist_path = NETLISTS_FOLDER / name
+            if not netlist_path.exists():
+                comparisons.append({
+                    'netlist': name,
+                    'error': f'Netlist not found: {name}',
+                })
+                continue
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            d_result = _run_engine_with_memory(DAlgorithmEngine(circuit))
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            d_exhaustive_result = _run_engine_with_memory(DExhaustiveAlgorithmEngine(circuit))
+
+            d_set = _detected_fault_set(d_result)
+            d2_set = _detected_fault_set(d_exhaustive_result)
+
+            comparisons.append({
+                'netlist': name,
+                'algorithms': [
+                    _dse_algo_metrics('D', d_result),
+                    _dse_algo_metrics('D_EXHAUSTIVE', d_exhaustive_result),
+                ],
+                'fault_overlap': {
+                    'both_detected': len(d_set & d2_set),
+                    'd_only': len(d_set - d2_set),
+                    'd_exhaustive_only': len(d2_set - d_set),
+                },
+            })
+
+        return jsonify({
+            'status': 'ok',
+            'comparisons': comparisons,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Internal error: {str(e)}'}), 500
+
+
+@app.route('/api/dse-sim-kernels', methods=['POST'])
+def run_dse_sim_kernels():
+    """Run DSE #4: compare simulate() and simulate_event_driven() for Basic flow."""
+    try:
+        payload = request.json or {}
+        netlist_names = payload.get('netlists', [])
+
+        if not netlist_names or not isinstance(netlist_names, list):
+            return jsonify({'error': 'netlists array required'}), 400
+
+        comparisons = []
+
+        for netlist_name in netlist_names:
+            name = str(netlist_name).strip()
+            netlist_path = NETLISTS_FOLDER / name
+            if not netlist_path.exists():
+                comparisons.append({
+                    'netlist': name,
+                    'error': f'Netlist not found: {name}',
+                })
+                continue
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            assign_default_inputs(circuit)
+            sim_result = _run_simulation_kernel_with_memory(circuit, 'simulate')
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            assign_default_inputs(circuit)
+            ev_result = _run_simulation_kernel_with_memory(circuit, 'event_driven')
+
+            sim_po = sim_result.get('po_values', {})
+            ev_po = ev_result.get('po_values', {})
+            po_names = sorted(set(sim_po.keys()) | set(ev_po.keys()))
+            po_matches = sum(1 for po in po_names if sim_po.get(po) == ev_po.get(po))
+            po_total = len(po_names)
+            po_mismatches = po_total - po_matches
+
+            comparisons.append({
+                'netlist': name,
+                'algorithms': [
+                    {
+                        'key': 'SIMULATE',
+                        'label': 'SIMULATE',
+                        'metrics': {
+                            'coverage': None,
+                            'time': float(sim_result.get('_wall_time_ms', 0.0)),
+                            'backtracks': None,
+                            'memory': float(sim_result.get('_memory_peak_bytes', 0)) / 1024.0,
+                            'test_vectors': None,
+                        },
+                        'summary': {
+                            'status': 'ok',
+                        },
+                        'final_vector_summary': {
+                            'vector_count': 0,
+                            'pi_order': [],
+                            'unique_vector_list': [],
+                            'excluded_all_x_count': 0,
+                        },
+                        'detected_faults': [
+                            f"PO {po} => {sim_po.get(po)}"
+                            for po in po_names
+                        ],
+                    },
+                    {
+                        'key': 'EVENT_DRIVEN',
+                        'label': 'EVENT_DRIVEN',
+                        'metrics': {
+                            'coverage': None,
+                            'time': float(ev_result.get('_wall_time_ms', 0.0)),
+                            'backtracks': None,
+                            'memory': float(ev_result.get('_memory_peak_bytes', 0)) / 1024.0,
+                            'test_vectors': None,
+                        },
+                        'summary': {
+                            'status': 'ok',
+                        },
+                        'final_vector_summary': {
+                            'vector_count': 0,
+                            'pi_order': [],
+                            'unique_vector_list': [],
+                            'excluded_all_x_count': 0,
+                        },
+                        'detected_faults': [
+                            f"PO {po} => {ev_po.get(po)}"
+                            for po in po_names
+                        ],
+                    },
+                ],
+                'fault_overlap': {
+                    'po_matches': po_matches,
+                    'po_total': po_total,
+                    'po_mismatches': po_mismatches,
+                },
+            })
+
+        return jsonify({
+            'status': 'ok',
+            'comparisons': comparisons,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Internal error: {str(e)}'}), 500
+
 def format_result(result_data, algo, filename):
     """Format ATPG result data for frontend display."""
+    final_vectors = _build_final_vector_summary(result_data)
+
     # Mirror the CLI summary fields so web output matches terminal output.
     stats = {
         'Status': result_data.get('status', 'ok'),
@@ -961,6 +1701,7 @@ def format_result(result_data, algo, filename):
         'Detected faults': result_data.get('detected_faults', 0),
         'Undetected faults': result_data.get('undetected_faults', 0),
         'Fault coverage (%)': f"{result_data.get('fault_coverage_pct', 0):.2f}",
+        'Final test vectors': final_vectors.get('vector_count', 0),
         'Total backtracks': result_data.get('total_backtracks', 0),
         'Average backtracks per fault': f"{result_data.get('avg_backtracks_per_fault', 0):.2f}",
         'Total time (ms)': f"{result_data.get('total_time_ms', 0):.3f}",
@@ -968,22 +1709,16 @@ def format_result(result_data, algo, filename):
     }
 
     # Keep per-fault lines in the same style as CLI output.
-    faults = []
-    for entry in result_data.get('results', []):
-        fault_str = (
-            f"- Fault {entry['fault']} | vector={entry.get('test_vector', {})} "
-            f"| detected={entry.get('detected', False)} "
-            f"| po={entry.get('po_values', {})} "
-            f"| backtracks={entry.get('backtracks', 0)} "
-            f"| time_us={entry.get('elapsed_us', 0):.3f}"
-        )
-        faults.append(fault_str)
+    faults = [_format_fault_line(entry) for entry in result_data.get('results', [])]
+    detected_faults = _detected_fault_lines(result_data, concrete_only=True)
 
     return {
         'algorithm': algo,
         'filename': filename,
         'stats': stats,
         'faults': faults,
+        'final_vector_summary': final_vectors,
+        'detected_faults': detected_faults,
     }
 
 
@@ -997,16 +1732,28 @@ def format_basic_result(result_data, filename):
         'Total faults generated': result_data.get('fault_count', 0),
     }
 
-    faults = [
+    faults = []
+    pi_values = result_data.get('pi_values', {})
+    po_values = result_data.get('po_values', {})
+
+    faults.append('[Inputs]')
+    faults.extend(
+        f"{pi_name} = {pi_val}"
+        for pi_name, pi_val in sorted(pi_values.items())
+    )
+
+    faults.append('[Outputs]')
+    faults.extend(
         f"{po_name} = {po_val}"
-        for po_name, po_val in result_data.get('po_values', {}).items()
-    ]
+        for po_name, po_val in sorted(po_values.items())
+    )
 
     return {
         'algorithm': 'BASIC',
         'filename': filename,
         'stats': stats,
         'faults': faults,
+        'hide_vector_sections': True,
     }
 
 if __name__ == '__main__':
