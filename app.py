@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template_string, jsonify, request, send_from_directory
 from pathlib import Path
 import os
 import sys
@@ -21,6 +21,7 @@ from netlist_graph import (
 
 app = Flask(__name__)
 NETLISTS_FOLDER = Path(__file__).parent / 'netlists'
+IMAGES_FOLDER = Path(__file__).parent / 'images'
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -466,6 +467,31 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         .vector-item:last-child {
             border-bottom: 0;
+        }
+
+        .basic-image-panel {
+            margin: 0 14px 14px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fff;
+            padding: 10px;
+        }
+
+        .basic-image-title {
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: var(--ink-soft);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .basic-image {
+            width: 100%;
+            max-height: 340px;
+            object-fit: contain;
+            border: 1px solid #ece8df;
+            border-radius: 8px;
+            background: #fffdf8;
         }
 
         @keyframes riseIn {
@@ -1055,6 +1081,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     ? `${renderVectorSummary(res.final_vector_summary, 'Final Test Vector Set')}${renderDetectedFaultSummary(res.detected_faults || [], 'Detected Per-Fault List')}`
                     : '';
                 const detailTitle = res.algorithm === 'BASIC' ? 'Simulation details' : 'Per-fault details';
+                const basicImageHtml = (res.algorithm === 'BASIC' && res.basic_image_url)
+                    ? `
+                        <div class="basic-image-panel">
+                            <h4 class="basic-image-title">Netlist Image</h4>
+                            <img class="basic-image" src="${res.basic_image_url}" alt="${res.filename} diagram" loading="lazy" />
+                        </div>
+                    `
+                    : '';
 
                 return `
                     <article class="result-card">
@@ -1063,6 +1097,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <span class="badge ${badgeClass}">${res.algorithm}</span>
                         </div>
                         <div class="stats">${statHtml}</div>
+                        ${basicImageHtml}
                         ${advancedSectionsHtml}
                         <details>
                             <summary>${detailTitle} (${faults.length})</summary>
@@ -1224,6 +1259,16 @@ def list_netlists():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/images/<path:filename>', methods=['GET'])
+def serve_image(filename):
+    """Serve netlist-related images from the images folder."""
+    safe_name = Path(filename).name
+    image_path = IMAGES_FOLDER / safe_name
+    if not image_path.exists() or not image_path.is_file():
+        return jsonify({'error': f'Image not found: {safe_name}'}), 404
+    return send_from_directory(str(IMAGES_FOLDER), safe_name)
+
 @app.route('/api/run', methods=['POST'])
 def run_atpg():
     """Run ATPG on selected netlists and algorithms."""
@@ -1298,6 +1343,18 @@ def _run_engine_with_memory(engine):
     result['_wall_time_ms'] = wall_ms
     result['_memory_peak_bytes'] = peak
     return result
+
+
+def _image_url_for_netlist(netlist_name):
+    stem = Path(netlist_name).stem
+    if not IMAGES_FOLDER.exists():
+        return None
+
+    for ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'):
+        candidate = IMAGES_FOLDER / f'{stem}{ext}'
+        if candidate.exists() and candidate.is_file():
+            return f"/api/images/{candidate.name}"
+    return None
 
 
 def _canonicalize_vector(vector, pi_order):
@@ -1754,6 +1811,7 @@ def format_basic_result(result_data, filename):
         'stats': stats,
         'faults': faults,
         'hide_vector_sections': True,
+        'basic_image_url': _image_url_for_netlist(filename),
     }
 
 if __name__ == '__main__':
