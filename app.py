@@ -1,7 +1,9 @@
 from flask import Flask, render_template_string, jsonify, request, send_from_directory
 from pathlib import Path
+import hashlib
 import os
 import sys
+import random
 import tracemalloc
 from time import perf_counter
 
@@ -601,17 +603,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;"><input type="checkbox" id="metricTestVectors" checked />Final Test Vectors</label>
                             </div>
                         </div>
-                        <div style="flex: 1; min-width: 250px; border-left: 1px solid #d7cfbf; padding-left: 20px;">
-                            <strong style="font-size: 12px; color: #365274; letter-spacing: 0.04em; text-transform: uppercase;">Iterative Tests</strong>
-                            <div style="display: grid; gap: 8px; margin-top: 8px;">
-                                <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:500; color:#10243f;">
-                                    <input type="checkbox" id="enableIterativeTests" />
-                                    Enable Iterative Tests
-                                </label>
-                                <label style="display: grid; gap: 4px; text-transform: none; font-weight: 500; color: #10243f; margin-left: 0;">
-                                    <span style="font-size: 12px;">Iterations (1-1000)</span>
-                                    <input type="number" id="iterationCount" value="100" min="1" max="1000" style="width: 100%; padding: 8px; border: 1px solid #d7cfbf; border-radius: 8px; font-size: 14px;" />
-                                </label>
+                        <div style="flex: 1; min-width: 250px; border-left: 1px solid #d7cfbf; padding-left: 20px; display: flex; align-items: center;">
+                            <div style="color: #365274; font-size: 13px; line-height: 1.5;">
+                                DSE runs in single-pass mode only. Metrics are reported directly from one ATPG execution per netlist.
                             </div>
                         </div>
                     </div>
@@ -649,6 +643,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compares levelized simulate() and event-driven simulate_event_driven() kernels in Basic flow.</p>
                     <div class="btn-row" style="margin-top: 4px; margin-bottom: 8px;">
                         <button class="btn-soft" id="runDseSimKernelsBtn" onclick="runDseSimKernels()">Run DSE #4</button>
+                    </div>
+                    <p style="margin: 0; color: #365274; font-size: 12px;">Output appears below the first screen in the unified results area.</p>
+                </div>
+
+                <div class="dse-block">
+                    <h3 style="margin: 0 0 6px 0; font-size: 16px;">DSE #5: Fill-bit policies</h3>
+                    <p style="margin: 0 0 10px 0; color: #365274; font-size: 13px;">Compares 0-fill, 1-fill, and deterministic random-fill on partially specified test vectors.</p>
+                    <div class="btn-row" style="margin-top: 4px; margin-bottom: 8px;">
+                        <button class="btn-soft" id="runDseFillVariantsBtn" onclick="runDseFillVariants()">Run DSE #5</button>
                     </div>
                     <p style="margin: 0; color: #365274; font-size: 12px;">Output appears below the first screen in the unified results area.</p>
                 </div>
@@ -691,6 +694,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <div class="empty">Run DSE #4 to compare simulate() and simulate_event_driven().</div>
             </section>
         </div>
+
+        <div class="outputs-panel">
+            <h3>DSE #5 Output (Fill-bit policies)</h3>
+            <section id="dseResultsFillVariants" class="results">
+                <div class="empty">Run DSE #5 to compare 0-fill, 1-fill, and random-fill.</div>
+            </section>
+        </div>
     </section>
 
     <script>
@@ -704,19 +714,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const runDsePodemVariantsBtn = document.getElementById('runDsePodemVariantsBtn');
         const runDseDVariantsBtn = document.getElementById('runDseDVariantsBtn');
         const runDseSimKernelsBtn = document.getElementById('runDseSimKernelsBtn');
+        const runDseFillVariantsBtn = document.getElementById('runDseFillVariantsBtn');
         const metricCoverage = document.getElementById('metricCoverage');
         const metricTime = document.getElementById('metricTime');
         const metricBacktracks = document.getElementById('metricBacktracks');
         const metricMemory = document.getElementById('metricMemory');
         const metricTestVectors = document.getElementById('metricTestVectors');
-        const enableIterativeTests = document.getElementById('enableIterativeTests');
-        const iterationCount = document.getElementById('iterationCount');
         const status = document.getElementById('status');
         const results = document.getElementById('results');
         const dseResultsPrimary = document.getElementById('dseResultsPrimary');
         const dseResultsPodemVariants = document.getElementById('dseResultsPodemVariants');
         const dseResultsDVariants = document.getElementById('dseResultsDVariants');
         const dseResultsSimKernels = document.getElementById('dseResultsSimKernels');
+        const dseResultsFillVariants = document.getElementById('dseResultsFillVariants');
 
         function getSelectedNetlists() {
             return Array.from(document.querySelectorAll('.netlist-cb:checked')).map(cb => cb.value);
@@ -730,13 +740,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (metricMemory.checked) selectedMetrics.push('memory');
             if (metricTestVectors.checked) selectedMetrics.push('test_vectors');
             return selectedMetrics;
-        }
-
-        function getIterativeTestSettings() {
-            return {
-                enabled: enableIterativeTests.checked,
-                iterations: Math.min(Math.max(parseInt(iterationCount.value) || 100, 1), 1000)
-            };
         }
 
         async function loadNetlists() {
@@ -839,25 +842,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            const iterativeSettings = getIterativeTestSettings();
-
             runDseBtn.disabled = true;
-            status.textContent = iterativeSettings.enabled 
-                ? `Running DSE #1 Iterative (${iterativeSettings.iterations}x) on ${selectedNetlists.length} netlist(s)...`
-                : `Running DSE #1 on ${selectedNetlists.length} netlist(s)...`;
+            status.textContent = `Running DSE #1 on ${selectedNetlists.length} netlist(s)...`;
             status.classList.add('running');
             status.classList.remove('error');
             dseResultsPrimary.innerHTML = '';
 
             try {
-                const endpoint = iterativeSettings.enabled ? '/api/dse-iterative' : '/api/dse';
+                const endpoint = '/api/dse';
                 const requestBody = {
                     netlists: selectedNetlists,
                     metrics: selectedMetrics,
                 };
-                if (iterativeSettings.enabled) {
-                    requestBody.iterations = iterativeSettings.iterations;
-                }
 
                 const resp = await fetch(endpoint, {
                     method: 'POST',
@@ -877,13 +873,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return;
                 }
 
-                status.textContent = iterativeSettings.enabled
-                    ? `DSE #1 Iterative complete: ${(data.comparisons || []).length} netlist comparison(s) × ${iterativeSettings.iterations} iterations.`
-                    : `DSE #1 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.textContent = `DSE #1 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
                 status.classList.remove('running', 'error');
                 status.classList.add('success');
-                const renderMode = iterativeSettings.enabled ? 'iterative' : 'pode';
-                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsPrimary, 'DSE #1', renderMode, iterativeSettings.enabled);
+                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsPrimary, 'DSE #1', 'd_variants', false);
             } catch (err) {
                 status.textContent = 'DSE failed: ' + err.message;
                 status.classList.add('error');
@@ -908,25 +901,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            const iterativeSettings = getIterativeTestSettings();
-
             runDsePodemVariantsBtn.disabled = true;
-            status.textContent = iterativeSettings.enabled 
-                ? `Running DSE #2 Iterative (${iterativeSettings.iterations}x) on ${selectedNetlists.length} netlist(s)...`
-                : `Running DSE #2 on ${selectedNetlists.length} netlist(s)...`;
+            status.textContent = `Running DSE #2 on ${selectedNetlists.length} netlist(s)...`;
             status.classList.add('running');
             status.classList.remove('error');
             dseResultsPodemVariants.innerHTML = '';
 
             try {
-                const endpoint = iterativeSettings.enabled ? '/api/dse-podem-variants-iterative' : '/api/dse-podem-variants';
+                const endpoint = '/api/dse-podem-variants';
                 const requestBody = {
                     netlists: selectedNetlists,
                     metrics: selectedMetrics,
                 };
-                if (iterativeSettings.enabled) {
-                    requestBody.iterations = iterativeSettings.iterations;
-                }
 
                 const resp = await fetch(endpoint, {
                     method: 'POST',
@@ -946,13 +932,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return;
                 }
 
-                status.textContent = iterativeSettings.enabled
-                    ? `DSE #2 Iterative complete: ${(data.comparisons || []).length} netlist comparison(s) × ${iterativeSettings.iterations} iterations.`
-                    : `DSE #2 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.textContent = `DSE #2 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
                 status.classList.remove('running', 'error');
                 status.classList.add('success');
-                const renderMode = iterativeSettings.enabled ? 'iterative' : 'podem_variants';
-                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsPodemVariants, 'DSE #2', renderMode, iterativeSettings.enabled);
+                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsPodemVariants, 'DSE #2', 'podem_variants', false);
             } catch (err) {
                 status.textContent = 'DSE #2 failed: ' + err.message;
                 status.classList.add('error');
@@ -977,25 +960,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            const iterativeSettings = getIterativeTestSettings();
-
             runDseDVariantsBtn.disabled = true;
-            status.textContent = iterativeSettings.enabled 
-                ? `Running DSE #3 Iterative (${iterativeSettings.iterations}x) on ${selectedNetlists.length} netlist(s)...`
-                : `Running DSE #3 on ${selectedNetlists.length} netlist(s)...`;
+            status.textContent = `Running DSE #3 on ${selectedNetlists.length} netlist(s)...`;
             status.classList.add('running');
             status.classList.remove('error');
             dseResultsDVariants.innerHTML = '';
 
             try {
-                const endpoint = iterativeSettings.enabled ? '/api/dse-d-variants-iterative' : '/api/dse-d-variants';
+                const endpoint = '/api/dse-d-variants';
                 const requestBody = {
                     netlists: selectedNetlists,
                     metrics: selectedMetrics,
                 };
-                if (iterativeSettings.enabled) {
-                    requestBody.iterations = iterativeSettings.iterations;
-                }
 
                 const resp = await fetch(endpoint, {
                     method: 'POST',
@@ -1015,13 +991,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return;
                 }
 
-                status.textContent = iterativeSettings.enabled
-                    ? `DSE #3 Iterative complete: ${(data.comparisons || []).length} netlist comparison(s) × ${iterativeSettings.iterations} iterations.`
-                    : `DSE #3 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.textContent = `DSE #3 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
                 status.classList.remove('running', 'error');
                 status.classList.add('success');
-                const renderMode = iterativeSettings.enabled ? 'iterative' : 'd_variants';
-                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsDVariants, 'DSE #3', renderMode, iterativeSettings.enabled);
+                renderDseResults(data.comparisons || [], selectedMetrics, dseResultsDVariants, 'DSE #3', 'd_variants', false);
             } catch (err) {
                 status.textContent = 'DSE #3 failed: ' + err.message;
                 status.classList.add('error');
@@ -1047,25 +1020,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
-            const iterativeSettings = getIterativeTestSettings();
-
             runDseSimKernelsBtn.disabled = true;
-            status.textContent = iterativeSettings.enabled 
-                ? `Running DSE #4 Iterative (${iterativeSettings.iterations}x) on ${selectedNetlists.length} netlist(s)...`
-                : `Running DSE #4 on ${selectedNetlists.length} netlist(s)...`;
+            status.textContent = `Running DSE #4 on ${selectedNetlists.length} netlist(s)...`;
             status.classList.add('running');
             status.classList.remove('error');
             dseResultsSimKernels.innerHTML = '';
 
             try {
-                const endpoint = iterativeSettings.enabled ? '/api/dse-sim-kernels-iterative' : '/api/dse-sim-kernels';
+                const endpoint = '/api/dse-sim-kernels';
                 const requestBody = {
                     netlists: selectedNetlists,
                     metrics: dse4Metrics,
                 };
-                if (iterativeSettings.enabled) {
-                    requestBody.iterations = iterativeSettings.iterations;
-                }
 
                 const resp = await fetch(endpoint, {
                     method: 'POST',
@@ -1085,19 +1051,67 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     return;
                 }
 
-                status.textContent = iterativeSettings.enabled
-                    ? `DSE #4 Iterative complete: ${(data.comparisons || []).length} netlist comparison(s) × ${iterativeSettings.iterations} iterations.`
-                    : `DSE #4 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.textContent = `DSE #4 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
                 status.classList.remove('running', 'error');
                 status.classList.add('success');
-                const renderMode = iterativeSettings.enabled ? 'iterative' : 'sim_kernels';
-                renderDseResults(data.comparisons || [], dse4Metrics, dseResultsSimKernels, 'DSE #4', renderMode, iterativeSettings.enabled);
+                renderDseResults(data.comparisons || [], dse4Metrics, dseResultsSimKernels, 'DSE #4', 'sim_kernels', false);
             } catch (err) {
                 status.textContent = 'DSE #4 failed: ' + err.message;
                 status.classList.add('error');
                 dseResultsSimKernels.innerHTML = '<div class="empty">' + err.message + '</div>';
             } finally {
                 runDseSimKernelsBtn.disabled = false;
+            }
+        }
+
+        async function runDseFillVariants() {
+            const selectedNetlists = getSelectedNetlists();
+            if (selectedNetlists.length === 0) {
+                status.textContent = 'Please select at least one netlist for DSE #5.';
+                status.classList.add('error');
+                return;
+            }
+
+            const fillMetrics = ['test_vectors', 'toggle_count', 'peak_switching', 'runtime_overhead'];
+
+            runDseFillVariantsBtn.disabled = true;
+            status.textContent = `Running DSE #5 on ${selectedNetlists.length} netlist(s)...`;
+            status.classList.add('running');
+            status.classList.remove('error');
+            dseResultsFillVariants.innerHTML = '';
+
+            try {
+                const resp = await fetch('/api/dse-fill-variants', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        netlists: selectedNetlists,
+                        metrics: fillMetrics,
+                    })
+                });
+
+                if (!resp.ok) {
+                    throw new Error('Server error: ' + resp.status);
+                }
+
+                const data = await resp.json();
+                if (data.error) {
+                    status.textContent = 'DSE #5 error: ' + data.error;
+                    status.classList.add('error');
+                    dseResultsFillVariants.innerHTML = '<div class="empty">' + data.error + '</div>';
+                    return;
+                }
+
+                status.textContent = `DSE #5 complete: ${(data.comparisons || []).length} netlist comparison(s).`;
+                status.classList.remove('running', 'error');
+                status.classList.add('success');
+                renderDseResults(data.comparisons || [], fillMetrics, dseResultsFillVariants, 'DSE #5', 'fill_variants', false);
+            } catch (err) {
+                status.textContent = 'DSE #5 failed: ' + err.message;
+                status.classList.add('error');
+                dseResultsFillVariants.innerHTML = '<div class="empty">' + err.message + '</div>';
+            } finally {
+                runDseFillVariantsBtn.disabled = false;
             }
         }
 
@@ -1199,7 +1213,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 time: 'Time (ms)',
                 backtracks: 'Total Backtracks',
                 memory: 'Peak Memory (KB)',
-                test_vectors: 'Final Test Vectors',
+                test_vectors: 'Final Pattern Count',
+                toggle_count: 'Toggle Count',
+                peak_switching: 'Peak Switching / Pattern',
+                runtime_overhead: 'Fill Overhead (ms)',
             };
 
             const cards = comparisons.map((cmp, idx) => {
@@ -1231,6 +1248,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         const total = overlap.po_total || 0;
                         const mismatches = overlap.po_mismatches_avg || 0;
                         overlapText = `PO matches (avg): ${matches.toFixed(1)}/${total}, mismatches (avg): ${mismatches.toFixed(1)}`;
+                    } else if (overlapMode === 'fill_variants') {
+                        overlapText = `Concrete pattern overlap: 0-fill ∩ 1-fill = ${overlap.zero_one_common || 0}, 0-fill ∩ random = ${overlap.zero_random_common || 0}, 1-fill ∩ random = ${overlap.one_random_common || 0}`;
                     } else {
                         overlapText += `, D-only (avg): ${overlap.d_only_avg || 0}, PODEM-only (avg): ${overlap.podem_only_avg || 0}`;
                     }
@@ -1282,6 +1301,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                         const total = overlap.po_total || 0;
                         const mismatches = overlap.po_mismatches || 0;
                         overlapText = `PO matches: ${matches}/${total}, mismatches: ${mismatches}`;
+                    } else if (overlapMode === 'fill_variants') {
+                        overlapText = `Concrete pattern overlap: 0-fill ∩ 1-fill = ${overlap.zero_one_common || 0}, 0-fill ∩ random = ${overlap.zero_random_common || 0}, 1-fill ∩ random = ${overlap.one_random_common || 0}`;
                     } else {
                         overlapText = `${overlapText}, D-only: ${overlap.d_only || 0}, PODEM-only: ${overlap.podem_only || 0}`;
                     }
@@ -1352,7 +1373,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 time: 'Time (ms)',
                 backtracks: 'Backtracks',
                 memory: 'Peak Memory (KB)',
-                test_vectors: 'Final Test Vectors',
+                test_vectors: 'Final Pattern Count',
+                toggle_count: 'Toggle Count',
+                peak_switching: 'Peak Switching / Pattern',
+                runtime_overhead: 'Fill Overhead (ms)',
             };
 
             ctx.font = '12px Space Grotesk';
@@ -1366,9 +1390,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 ctx.fillStyle = colors[i % colors.length];
                 ctx.fillRect(x, y, barW, h);
                 ctx.fillStyle = '#10243f';
-                const valueText = (metric === 'backtracks' || metric === 'test_vectors')
+                const valueText = (metric === 'backtracks' || metric === 'test_vectors' || metric === 'toggle_count' || metric === 'peak_switching')
                     ? String(Math.round(v))
-                    : String(v.toFixed(metric === 'coverage' ? 2 : 1));
+                    : String(v.toFixed(metric === 'coverage' ? 2 : metric === 'runtime_overhead' ? 3 : 1));
                 ctx.fillText(valueText, x, y - 5);
                 ctx.fillText(algos[i].label, x, height - 8);
             });
@@ -1399,7 +1423,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 time: 'Time (ms)',
                 backtracks: 'Backtracks',
                 memory: 'Peak Memory (KB)',
-                test_vectors: 'Final Test Vectors',
+                test_vectors: 'Final Pattern Count',
+                toggle_count: 'Toggle Count',
+                peak_switching: 'Peak Switching / Pattern',
+                runtime_overhead: 'Fill Overhead (ms)',
             };
 
             ctx.font = '12px Space Grotesk';
@@ -1590,6 +1617,159 @@ def _build_final_vector_summary(result_data):
     }
 
 
+def _vector_signature(vector, pi_order):
+    return tuple((pi, vector.get(pi, 'X')) for pi in pi_order)
+
+
+def _seed_from_parts(*parts):
+    digest = hashlib.sha256('::'.join(str(part) for part in parts).encode('utf-8')).hexdigest()
+    return int(digest[:16], 16)
+
+
+def _fill_vector_x_bits(vector, policy, seed_parts=None):
+    filled = {}
+    x_bits_filled = 0
+    rng = None
+
+    if policy == 'random-fill':
+        rng = random.Random(_seed_from_parts(*(seed_parts or [])))
+
+    for name, value in vector.items():
+        if value != 'X':
+            filled[name] = value
+            continue
+
+        x_bits_filled += 1
+        if policy == '0-fill':
+            filled[name] = '0'
+        elif policy == '1-fill':
+            filled[name] = '1'
+        elif policy == 'random-fill':
+            filled[name] = rng.choice(['0', '1']) if rng is not None else '0'
+        else:
+            filled[name] = 'X'
+
+    return filled, x_bits_filled
+
+
+def _canonicalized_filled_vectors(vector_list, pi_order):
+    seen = set()
+    unique = []
+    for vec in vector_list:
+        signature = _vector_signature(vec, pi_order)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        unique.append({pi: vec.get(pi, 'X') for pi in pi_order})
+    return unique
+
+
+def _switching_metrics(vector_list, pi_order):
+    if not vector_list or len(vector_list) < 2:
+        return {
+            'toggle_count': 0,
+            'peak_switching': 0,
+        }
+
+    toggle_count = 0
+    peak_switching = 0
+
+    for left, right in zip(vector_list, vector_list[1:]):
+        pair_toggles = 0
+        for pi in pi_order:
+            if left.get(pi, 'X') != right.get(pi, 'X'):
+                pair_toggles += 1
+        toggle_count += pair_toggles
+        peak_switching = max(peak_switching, pair_toggles)
+
+    return {
+        'toggle_count': toggle_count,
+        'peak_switching': peak_switching,
+    }
+
+
+def _policy_signature_set(summary):
+    pi_order = summary.get('pi_order', []) or []
+    vectors = summary.get('unique_vector_list', []) or []
+    return {
+        tuple((pi, vec.get(pi, 'X')) for pi in pi_order)
+        for vec in vectors
+    }
+
+
+def _build_fill_policy_summary(result_data, netlist_name, policy):
+    detected_rows = [
+        row for row in result_data.get('results', [])
+        if row.get('detected', False)
+    ]
+
+    concrete_vectors = []
+    fill_bits_used = 0
+    fill_start = perf_counter()
+
+    for row in detected_rows:
+        raw_vector = row.get('test_vector', {}) or {}
+        if not isinstance(raw_vector, dict):
+            continue
+
+        filled_vector, filled_bits = _fill_vector_x_bits(
+            raw_vector,
+            policy,
+            seed_parts=(netlist_name, policy, row.get('fault', ''), _vector_signature(raw_vector, sorted(raw_vector.keys()))),
+        )
+        fill_bits_used += filled_bits
+        concrete_vectors.append(filled_vector)
+
+    fill_runtime_ms = (perf_counter() - fill_start) * 1000.0
+    pi_order = sorted({pi for vec in concrete_vectors for pi in vec.keys()})
+    unique_vectors = _canonicalized_filled_vectors(concrete_vectors, pi_order)
+    switching = _switching_metrics(unique_vectors, pi_order)
+    pre_fill_count = len(concrete_vectors)
+    post_fill_count = len(unique_vectors)
+
+    return {
+        'key': policy,
+        'label': policy,
+        'metrics': {
+            'coverage': float(result_data.get('fault_coverage_pct', 0.0)),
+            'time': float(result_data.get('total_time_ms', 0.0)),
+            'backtracks': float(result_data.get('total_backtracks', 0)),
+            'memory': float(result_data.get('_memory_peak_bytes', 0)) / 1024.0,
+            'test_vectors': float(post_fill_count),
+            'toggle_count': float(switching['toggle_count']),
+            'peak_switching': float(switching['peak_switching']),
+            'runtime_overhead': float(fill_runtime_ms),
+        },
+        'summary': {
+            'status': result_data.get('status', 'ok'),
+            'faults': result_data.get('fault_count', 0),
+            'detected': result_data.get('detected_faults', 0),
+            'undetected': result_data.get('undetected_faults', 0),
+            'pre_fill_pattern_count': pre_fill_count,
+            'post_fill_pattern_count': post_fill_count,
+            'pattern_delta': pre_fill_count - post_fill_count,
+            'fill_bits_used': fill_bits_used,
+        },
+        'final_vector_summary': {
+            'vector_count': post_fill_count,
+            'pi_order': pi_order,
+            'unique_vector_list': unique_vectors,
+            'excluded_all_x_count': 0,
+        },
+        'detected_faults': [
+            _format_fault_line({
+                **row,
+                'test_vector': _fill_vector_x_bits(
+                    row.get('test_vector', {}) or {},
+                    policy,
+                    seed_parts=(netlist_name, policy, row.get('fault', '')),
+                )[0],
+            })
+            for row in detected_rows
+        ],
+    }
+
+
 def _format_fault_line(entry):
     return (
         f"- Fault {entry.get('fault')} | vector={entry.get('test_vector', {})} "
@@ -1639,6 +1819,58 @@ def _detected_fault_set(result_data):
         for row in result_data.get('results', [])
         if row.get('detected', False)
     }
+
+
+@app.route('/api/dse-fill-variants', methods=['POST'])
+def run_dse_fill_variants():
+    """Run DSE #5: compare fill policies on detected vectors."""
+    try:
+        payload = request.json or {}
+        netlist_names = payload.get('netlists', [])
+
+        if not netlist_names or not isinstance(netlist_names, list):
+            return jsonify({'error': 'netlists array required'}), 400
+
+        comparisons = []
+        policies = ['0-fill', '1-fill', 'random-fill']
+
+        for netlist_name in netlist_names:
+            name = str(netlist_name).strip()
+            netlist_path = NETLISTS_FOLDER / name
+            if not netlist_path.exists():
+                comparisons.append({
+                    'netlist': name,
+                    'error': f'Netlist not found: {name}',
+                })
+                continue
+
+            circuit = parse_netlist(str(netlist_path))
+            levelize(circuit)
+            base_result = _run_engine_with_memory(DAlgorithmEngine(circuit))
+
+            algorithms = [
+                _build_fill_policy_summary(base_result, name, policy)
+                for policy in policies
+            ]
+
+            policy_sets = {algo['key']: _policy_signature_set(algo['final_vector_summary']) for algo in algorithms}
+
+            comparisons.append({
+                'netlist': name,
+                'algorithms': algorithms,
+                'fault_overlap': {
+                    'zero_one_common': len(policy_sets['0-fill'] & policy_sets['1-fill']),
+                    'zero_random_common': len(policy_sets['0-fill'] & policy_sets['random-fill']),
+                    'one_random_common': len(policy_sets['1-fill'] & policy_sets['random-fill']),
+                },
+            })
+
+        return jsonify({
+            'status': 'ok',
+            'comparisons': comparisons,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Internal error: {str(e)}'}), 500
 
 
 def _run_simulation_kernel_with_memory(circuit, kernel):
@@ -2273,6 +2505,9 @@ def run_dse_sim_kernels_iterative():
         })
     except Exception as e:
         return jsonify({'error': f'Internal error: {str(e)}'}), 500
+
+
+def format_result(result_data, algo, filename):
     """Format ATPG result data for frontend display."""
     final_vectors = _build_final_vector_summary(result_data)
 
