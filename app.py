@@ -23,6 +23,7 @@ from backend.utils.dse_helpers import (
     build_final_vector_summary as _build_final_vector_summary,
     detected_fault_lines as _detected_fault_lines,
     format_fault_line as _format_fault_line,
+    undetected_fault_lines as _undetected_fault_lines,
 )
 
 app = Flask(__name__)
@@ -35,6 +36,11 @@ app.register_blueprint(dse5.bp)
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/explainer')
+def info_page():
+    return render_template('explainer.html')
 
 @app.route('/api/netlists', methods=['GET'])
 def list_netlists():
@@ -137,7 +143,7 @@ def _basic_image_options_for_netlist(netlist_name):
     generated_url = _generate_basic_flow_netlist_svg(netlist_name)
     if generated_url:
         options.append({
-            'label': 'Generated Graph (Basic Flow)',
+            'label': 'Generated Graph (Netlist Parsing + Levelization)',
             'url': generated_url,
         })
         seen_urls.add(generated_url)
@@ -300,6 +306,7 @@ def format_result(result_data, algo, filename):
     # Keep per-fault lines in the same style as CLI output.
     faults = [_format_fault_line(entry) for entry in result_data.get('results', [])]
     detected_faults = _detected_fault_lines(result_data, concrete_only=True)
+    undetected_faults = _undetected_fault_lines(result_data)
 
     return {
         'algorithm': algo,
@@ -308,6 +315,7 @@ def format_result(result_data, algo, filename):
         'faults': faults,
         'final_vector_summary': final_vectors,
         'detected_faults': detected_faults,
+        'undetected_faults': undetected_faults,
     }
 
 

@@ -592,6 +592,20 @@
             `;
         }
 
+        function renderFaultSummary(items, title, emptyText) {
+            const list = items || [];
+            const inner = list.length
+                ? list.map(item => `<div class="fault-item">${item}</div>`).join('')
+                : `<div class="fault-item">${emptyText}</div>`;
+
+            return `
+                <details style="padding: 0 14px 14px;">
+                    <summary>${title} (${list.length})</summary>
+                    <div class="faults">${inner}</div>
+                </details>
+            `;
+        }
+
         function renderResults(resultList) {
             if (!resultList || resultList.length === 0) {
                 results.innerHTML = '<div class="empty">No results to display.</div>';
@@ -611,7 +625,7 @@
                     : '<div class="fault-item">No per-fault lines.</div>';
                 const showAdvancedSections = !res.hide_vector_sections;
                 const advancedSectionsHtml = showAdvancedSections
-                    ? `${renderVectorSummary(res.final_vector_summary, 'Final Test Vector Set')}${renderDetectedFaultSummary(res.detected_faults || [], 'Detected Per-Fault List')}`
+                    ? `${renderVectorSummary(res.final_vector_summary, 'Final Test Vector Set')}${renderDetectedFaultSummary(res.detected_faults || [], 'Detected Per-Fault List')}${renderFaultSummary(res.undetected_faults || [], 'Undetected Faults', 'No undetected faults.')}`
                     : '';
                 const detailTitle = res.algorithm === 'BASIC' ? 'Simulation details' : 'Per-fault details';
                 const imageOptions = Array.isArray(res.basic_image_options) ? res.basic_image_options : [];
@@ -717,6 +731,13 @@
                         return `<div class="dse-chart"><canvas id="${id}" height="120"></canvas></div>`;
                     }).join('');
 
+                    const detailBlocks = algos.map(a => {
+                        return `
+                            ${renderDetectedFaultSummary(a.detected_faults || [], `${a.label} Detected Per-Fault List`)}
+                            ${renderFaultSummary(a.undetected_faults || [], `${a.label} Undetected Faults`, 'No undetected faults.')}
+                        `;
+                    }).join('');
+
                     return `
                         <article class="result-card">
                             <div class="result-head">
@@ -732,6 +753,7 @@
                                 </table>
                             </div>
                             <div class="dse-mini-charts" style="padding: 0 12px 12px 12px;">${chartCanvases}</div>
+                            <div style="display:grid; gap:10px; padding: 0 0 8px 0;">${detailBlocks}</div>
                         </article>
                     `;
                 } else {
@@ -770,6 +792,7 @@
                         return `
                             ${renderVectorSummary(a.final_vector_summary, `${a.label} Final Vectors`)}
                             ${renderDetectedFaultSummary(a.detected_faults || [], `${a.label} Detected Per-Fault List`)}
+                            ${renderFaultSummary(a.undetected_faults || [], `${a.label} Undetected Faults`, 'No undetected faults.')}
                         `;
                     }).join('');
 

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATPG Info Page</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+    <div class="explainer-shell">
+        <section class="explainer-hero">
+            <h1>ATPG Info Page</h1>
+            <p>
+                This page explains how the current codebase works: the Basic Flow path, the D and PODEM engines,
+                and how each DSE route compares algorithms, metrics and iterative averages. 
+            </p>
+            <div style="margin-top: 14px; display:flex; gap:10px; flex-wrap:wrap;">
+                <a href="{{ url_for('index') }}" class="page-link">Back to ATPG Console</a>
+            </div>
+        </section>
+
+        <section class="explainer-grid">
+            <article class="explainer-card">
+                <header>
+                    <h2>How the Console Runs</h2>
+                    <span class="badge badge-run">Frontend to Backend</span>
+                </header>
+                <div class="body">
+                    <div class="explain-note">
+                        The frontend collects selected netlists, selected algorithms and DSE metrics, then posts JSON to the
+                        matching Flask endpoint. The backend parses the netlist again for each algorithm so every engine starts
+                        from the same circuit state.
+                    </div>
+                    <div class="code-path">UI selection -> /api/run or /api/dse* -> parse_netlist() -> levelize() -> engine.run() -> format_result()</div>
+                    <div class="flow-steps">
+                        <div class="flow-step"><strong>Basic run</strong> uses the event-driven simulator and then formats node, PI, PO and fault counts.</div>
+                        <div class="flow-step"><strong>DSE runs</strong> compare algorithms or kernels and return per-algorithm metrics plus overlap summaries.</div>
+                        <div class="flow-step"><strong>Iterative mode</strong> repeats the same comparison N times and aggregates min, max, average and standard deviation.</div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="explainer-card">
+                <header>
+                    <h2>Route Map</h2>
+                    <span class="badge badge-run">API Overview</span>
+                </header>
+                <div class="body">
+                    <table class="route-table">
+                        <thead>
+                            <tr>
+                                <th>Feature</th>
+                                <th>Route</th>
+                                <th>What it returns</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Basic Flow</td>
+                                <td>/api/run with BASIC</td>
+                                <td>Node/PI/PO counts, fault counts, image options, detected and undetected faults</td>
+                            </tr>
+                            <tr>
+                                <td>D vs PODEM</td>
+                                <td>/api/dse</td>
+                                <td>Coverage, time, backtracks, memory, test vectors, fault overlap</td>
+                            </tr>
+                            <tr>
+                                <td>PODEM vs PODEM_NO_HEUR</td>
+                                <td>/api/dse-podem-variants</td>
+                                <td>Heuristic impact on the same engine family</td>
+                            </tr>
+                            <tr>
+                                <td>D vs D_EXHAUSTIVE</td>
+                                <td>/api/dse-d-variants</td>
+                                <td>Baseline D compared to the exhaustive variant</td>
+                            </tr>
+                            <tr>
+                                <td>SIMULATE vs EVENT_DRIVEN</td>
+                                <td>/api/dse-sim-kernels</td>
+                                <td>Basic-flow  timing and memory comparison</td>
+                            </tr>
+                            <tr>
+                                <td>Fill policies</td>
+                                <td>/api/dse-fill-variants</td>
+                                <td>0-fill, 1-fill, random-fill pattern behavior and switching metrics</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <section class="explainer-card">
+            <header>
+                <h2>Algorithm Briefs</h2>
+                <span class="badge badge-run">Core Engines</span>
+            </header>
+            <div class="body">
+                <div class="brief-list">
+                    <div class="brief-item">
+                        <div class="brief-meta">
+                            <span class="brief-pill">Basic Flow</span>
+                            <span class="brief-pill route">/api/run</span>
+                            <span class="brief-pill metric">simulate_event_driven()</span>
+                        </div>
+                        <h3>Purpose</h3>
+                        <p>Builds a parsed circuit, assigns default inputs, runs event-driven simulation and reports the raw circuit state. It is the simplest end-to-end path and is also used to generate or reuse a visual netlist image.</p>
+                        <p><strong>Key functions:</strong> parse_netlist(), levelize(), assign_default_inputs(), simulate_event_driven(), format_basic_result().</p>
+                        <p><strong>Read the output as:</strong> circuit size, generated faults, PI/PO values and available image sources.</p>
+                    </div>
+
+                    <div class="brief-item">
+                        <div class="brief-meta">
+                            <span class="brief-pill">D</span>
+                            <span class="brief-pill route">/api/run or /api/dse*</span>
+                            <span class="brief-pill metric">DAlgorithmEngine</span>
+                        </div>
+                        <h3>Purpose</h3>
+                        <p>Runs the classic D-algorithm ATPG engine on the levelized circuit. In DSE #1 it is compared directly with PODEM and in DSE #3 it is compared with D_EXHAUSTIVE.</p>
+                        <p><strong>Key functions:</strong> DAlgorithmEngine(circuit), run_engine_with_memory(), dse_algo_metrics().</p>
+                        <p><strong>Read the output as:</strong> coverage, backtracks, time, memory, final vector count and the detected-versus-undetected fault split.</p>
+                    </div>
+
+                    <div class="brief-item">
+                        <div class="brief-meta">
+                            <span class="brief-pill">PODEM</span>
+                            <span class="brief-pill route">/api/run or /api/dse*</span>
+                            <span class="brief-pill metric">PODEMEngine</span>
+                        </div>
+                        <h3>Purpose</h3>
+                        <p>Runs PODEM, optionally with heuristics. The heuristic-enabled and heuristic-free versions are compared in DSE #2.</p>
+                        <p><strong>Key functions:</strong> PODEMEngine(circuit, use_heuristics=True/False), run_engine_with_memory(), detected_fault_set().</p>
+                        <p><strong>Read the output as:</strong> performance tradeoffs between heuristic search and baseline search, plus overlap in detected faults.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="explainer-grid">
+            <article class="explainer-card">
+                <header>
+                    <h2>DSE #1 to #3</h2>
+                    <span class="badge badge-run">ATPG Comparison</span>
+                </header>
+                <div class="body">
+                    <div class="flow-step">
+                        <strong>DSE #1: D vs PODEM</strong>
+                        <p>Shows whether PODEM improves coverage, time or backtracking compared with the baseline D engine. The iterative endpoint averages those same metrics across repeated runs.</p>
+                    </div>
+                    <div class="flow-step">
+                        <strong>DSE #2: PODEM vs PODEM_NO_HEUR</strong>
+                        <p>Isolates the effect of heuristics inside the same search strategy. This is the cleanest comparison for judging search guidance.</p>
+                    </div>
+                    <div class="flow-step">
+                        <strong>DSE #3: D vs D_EXHAUSTIVE</strong>
+                        <p>Compares the baseline D engine against the more exhaustive variant so you can see whether extra search effort buys additional detection.</p>
+                    </div>
+                </div>
+            </article>
+
+            <article class="explainer-card">
+                <header>
+                    <h2>DSE #4 to #5</h2>
+                    <span class="badge badge-run">Simulation and Fill Policy</span>
+                </header>
+                <div class="body">
+                    <div class="flow-step">
+                        <strong>DSE #4: SIMULATE vs EVENT_DRIVEN</strong>
+                        <p>Uses the Basic Flow circuit and compares the two simulations. Time and memory matter most here because the fault-detection result is the same circuit semantics.</p>
+                    </div>
+                    <div class="flow-step">
+                        <strong>DSE #5: Fill-bit policies</strong>
+                        <p>Starts from the detected vectors produced by D and then fills X bits using 0-fill, 1-fill or deterministic random-fill. The interesting metrics are test vector count, toggle count, peak switching and fill overhead.</p>
+                    </div>
+                    <div class="explain-note">
+                        Iterative mode is supported for all DSE routes. The backend repeats the same comparison N times and returns aggregate statistics instead of a single execution snapshot.
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="explainer-card">
+            <header>
+                <h2>Reading the Metrics</h2>
+                <span class="badge badge-run">What Matters</span>
+            </header>
+            <div class="body">
+                <div class="glossary">
+                    <div class="glossary-item">
+                        <strong>Coverage (%)</strong>
+                        Percentage of faults detected by the algorithm on the current netlist.
+                    </div>
+                    <div class="glossary-item">
+                        <strong>Time (ms)</strong>
+                        Wall-clock runtime for the engine or simulation execution.
+                    </div>
+                    <div class="glossary-item">
+                        <strong>Backtracks</strong>
+                        Search backtracking effort, especially important for D and PODEM comparisons.
+                    </div>
+                    <div class="glossary-item">
+                        <strong>Memory (KB)</strong>
+                        Peak traced memory during execution.
+                    </div>
+                    <div class="glossary-item">
+                        <strong>Detected faults</strong>
+                        Faults where detected=true in the per-fault result list.
+                    </div>
+                    <div class="glossary-item">
+                        <strong>Undetected faults</strong>
+                        Faults where detected=false, useful for seeing what still escapes the ATPG search.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="explainer-card">
+            <header>
+                <h2>What Happens When You Click Run</h2>
+                <span class="badge badge-run">Execution Flow</span>
+            </header>
+            <div class="body">
+                <div class="flow-steps">
+                    <div class="flow-step"><strong>1.</strong> The browser gathers selected netlists, algorithms and metrics from the left panel.</div>
+                    <div class="flow-step"><strong>2.</strong> The frontend posts JSON to the matching route such as /api/run or /api/dse-d-variants-iterative.</div>
+                    <div class="flow-step"><strong>3.</strong> The backend parses the netlist again so each algorithm starts from the same baseline circuit.</div>
+                    <div class="flow-step"><strong>4.</strong> The relevant ATPG engine or simulation kernel runs and captures runtime, memory, vectors and faults.</div>
+                    <div class="flow-step"><strong>5.</strong> The result formatter packages the response into the card-friendly shape shown in the console.</div>
+                </div>
+                <div class="code-path">run button -> fetch() -> Flask route -> parse_netlist() -> engine.run() -> format_result()/dse_algo_metrics()</div>
+            </div>
+        </section>
+    </div>
+</body>
+</html>

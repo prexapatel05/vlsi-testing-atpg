@@ -168,9 +168,18 @@ def detected_fault_lines(result_data, concrete_only=False):
     ]
 
 
+def undetected_fault_lines(result_data):
+    return [
+        format_fault_line(row)
+        for row in result_data.get('results', [])
+        if not row.get('detected', False)
+    ]
+
+
 def dse_algo_metrics(label, result_data):
     final_vectors = build_final_vector_summary(result_data)
     detected_faults = detected_fault_lines(result_data, concrete_only=True)
+    undetected_faults = undetected_fault_lines(result_data)
     return {
         'key': label,
         'label': label,
@@ -189,6 +198,7 @@ def dse_algo_metrics(label, result_data):
         },
         'final_vector_summary': final_vectors,
         'detected_faults': detected_faults,
+        'undetected_faults': undetected_faults,
     }
 
 
