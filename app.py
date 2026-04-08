@@ -178,12 +178,18 @@ def _generate_basic_flow_netlist_svg(netlist_name):
         if not netlist_path.exists():
             return None
 
-        IMAGES_FOLDER.mkdir(parents=True, exist_ok=True)
         svg_path = IMAGES_FOLDER / f"{stem}.svg"
 
         # Reuse an existing generated SVG if already present.
         if svg_path.exists() and svg_path.is_file():
             return f"/api/images/{svg_path.name}"
+
+        # Vercel serverless filesystem is read-only for persistent writes.
+        # If no pre-generated SVG exists, skip runtime file generation.
+        if os.getenv('VERCEL') == '1':
+            return None
+
+        IMAGES_FOLDER.mkdir(parents=True, exist_ok=True)
 
         circuit = parse_netlist(str(netlist_path))
         levelize(circuit)

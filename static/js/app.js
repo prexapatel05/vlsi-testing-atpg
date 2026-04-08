@@ -438,8 +438,7 @@
                 return;
             }
 
-            const dseMode = getDseExecutionSettings();
-            if (!dseMode) return;
+            const dseMode = { iterative: true, iterations: 3 };
 
             const selectedMetrics = getSelectedMetrics();
             const dse4Metrics = selectedMetrics.filter(m => m === 'time' || m === 'memory');
@@ -450,20 +449,18 @@
             }
 
             runDseSimKernelsBtn.disabled = true;
-            status.textContent = dseMode.iterative
-                ? `Running DSE #4 (${dseMode.iterations} iterations) on ${selectedNetlists.length} netlist(s)...`
-                : `Running DSE #4 on ${selectedNetlists.length} netlist(s)...`;
+            status.textContent = `Running DSE #4 (${dseMode.iterations} iterations) on ${selectedNetlists.length} netlist(s)...`;
             status.classList.add('running');
             status.classList.remove('error');
             focusOutputPanel('dse4');
             dseResultsSimKernels.innerHTML = '';
 
             try {
-                const endpoint = dseMode.iterative ? '/api/dse-sim-kernels-iterative' : '/api/dse-sim-kernels';
+                const endpoint = '/api/dse-sim-kernels-iterative';
                 const requestBody = {
                     netlists: selectedNetlists,
                     metrics: dse4Metrics,
-                    ...(dseMode.iterative ? { iterations: dseMode.iterations } : {}),
+                    iterations: dseMode.iterations,
                 };
 
                 const resp = await fetch(endpoint, {

@@ -1,3 +1,5 @@
+import random
+
 from flask import Blueprint, jsonify, request
 from netlist_graph import assign_default_inputs, levelize, parse_netlist
 
@@ -5,6 +7,46 @@ from backend.config import NETLISTS_FOLDER
 from backend.utils.dse_helpers import calculate_stats, run_simulation_kernel_with_memory
 
 bp = Blueprint('dse4', __name__)
+
+
+def _apply_vector(circuit, vector):
+    for pi in circuit.PIs:
+        pi.value = vector.get(pi.name, '0')
+
+
+def _set_changed_inputs(circuit, previous_vector, next_vector):
+    changed = []
+    for pi in circuit.PIs:
+        if previous_vector.get(pi.name, 'X') != next_vector.get(pi.name, 'X'):
+            changed.append(pi)
+    return changed
+
+
+def _build_sparse_vector_sequence(circuit, count, toggle_density, seed):
+    """Build deterministic sparse-activity vectors for fair multivector benchmarking."""
+    assign_default_inputs(circuit)
+    current = {pi.name: pi.value for pi in circuit.PIs}
+    vectors = [dict(current)]
+
+    if count <= 1:
+        return vectors
+
+    pi_names = [pi.name for pi in circuit.PIs]
+    if not pi_names:
+        return vectors
+
+    rng = random.Random(seed)
+    toggle_count = max(1, int(round(len(pi_names) * toggle_density)))
+    toggle_count = min(toggle_count, len(pi_names))
+
+    for _ in range(count - 1):
+        nxt = dict(current)
+        for name in rng.sample(pi_names, toggle_count):
+            nxt[name] = '0' if nxt[name] == '1' else '1'
+        vectors.append(nxt)
+        current = nxt
+
+    return vectors
 
 
 @bp.route('/api/dse-sim-kernels', methods=['POST'])
@@ -48,6 +90,7 @@ def run_dse_sim_kernels():
 
             comparisons.append({
                 'netlist': name,
+                'benchmark_mode': 'cold-start-single-vector',
                 'algorithms': [
                     {
                         'key': 'SIMULATE',
@@ -105,11 +148,13 @@ def run_dse_sim_kernels():
 
 @bp.route('/api/dse-sim-kernels-iterative', methods=['POST'])
 def run_dse_sim_kernels_iterative():
-    """Run DSE #4 iteratively: SIMULATE vs EVENT_DRIVEN with multiple iterations."""
+    """Run DSE #4 in sparse multivector mode: full-pass SIMULATE vs incremental EVENT_DRIVEN."""
     try:
         payload = request.json or {}
         netlist_names = payload.get('netlists', [])
         iterations = min(max(payload.get('iterations', 100), 1), 1000)
+        toggle_density = float(payload.get('toggle_density', 0.05))
+        toggle_density = min(max(toggle_density, 0.01), 0.5)
 
         if not netlist_names or not isinstance(netlist_names, list):
             return jsonify({'error': 'netlists array required'}), 400
@@ -127,22 +172,48 @@ def run_dse_sim_kernels_iterative():
             sim_memories = []
             ev_memories = []
             po_matches_list = []
+            sim_gate_evals = []
+            ev_gate_evals = []
+            ev_duplicate_filters = []
 
-            for _ in range(iterations):
-                circuit = parse_netlist(str(netlist_path))
-                levelize(circuit)
-                assign_default_inputs(circuit)
-                sim_result = run_simulation_kernel_with_memory(circuit, 'simulate')
+            sim_circuit = parse_netlist(str(netlist_path))
+            ev_circuit = parse_netlist(str(netlist_path))
+            levelize(sim_circuit)
+            levelize(ev_circuit)
 
-                circuit = parse_netlist(str(netlist_path))
-                levelize(circuit)
-                assign_default_inputs(circuit)
-                ev_result = run_simulation_kernel_with_memory(circuit, 'event_driven')
+            vectors = _build_sparse_vector_sequence(
+                sim_circuit,
+                iterations,
+                toggle_density,
+                seed=f"dse4::{name}::{iterations}::{toggle_density}",
+            )
+
+            previous_vector = None
+
+            for index, vector in enumerate(vectors):
+                _apply_vector(sim_circuit, vector)
+                sim_result = run_simulation_kernel_with_memory(sim_circuit, 'simulate')
+
+                if index == 0:
+                    _apply_vector(ev_circuit, vector)
+                    ev_result = run_simulation_kernel_with_memory(ev_circuit, 'event_driven')
+                else:
+                    changed_inputs = _set_changed_inputs(ev_circuit, previous_vector, vector)
+                    _apply_vector(ev_circuit, vector)
+                    ev_result = run_simulation_kernel_with_memory(ev_circuit, 'event_driven', changed_inputs=changed_inputs)
+
+                previous_vector = vector
 
                 sim_times.append(float(sim_result.get('_wall_time_ms', 0.0)))
                 ev_times.append(float(ev_result.get('_wall_time_ms', 0.0)))
                 sim_memories.append(float(sim_result.get('_memory_peak_bytes', 0)) / 1024.0)
                 ev_memories.append(float(ev_result.get('_memory_peak_bytes', 0)) / 1024.0)
+
+                sim_stats = sim_result.get('_kernel_stats', {}) or {}
+                ev_stats = ev_result.get('_kernel_stats', {}) or {}
+                sim_gate_evals.append(float(sim_stats.get('gate_evaluations', 0)))
+                ev_gate_evals.append(float(ev_stats.get('gate_evaluations', 0)))
+                ev_duplicate_filters.append(float(ev_stats.get('duplicate_enqueues_filtered', 0)))
 
                 sim_po = sim_result.get('po_values', {})
                 ev_po = ev_result.get('po_values', {})
@@ -150,8 +221,16 @@ def run_dse_sim_kernels_iterative():
                 po_matches = sum(1 for po in po_names if sim_po.get(po) == ev_po.get(po))
                 po_matches_list.append(po_matches)
 
+            avg_sim_time = sum(sim_times) / len(sim_times) if sim_times else 0.0
+            avg_ev_time = sum(ev_times) / len(ev_times) if ev_times else 0.0
+            speedup = (avg_sim_time / avg_ev_time) if avg_ev_time > 0 else 0.0
+
             comparisons.append({
                 'netlist': name,
+                'benchmark_mode': 'sparse-multivector-incremental',
+                'toggle_density': toggle_density,
+                'vector_count': len(vectors),
+                'speedup_sim_over_event': speedup,
                 'algorithms': [
                     {
                         'key': 'SIMULATE',
@@ -162,6 +241,7 @@ def run_dse_sim_kernels_iterative():
                             'backtracks': {'min': 0, 'max': 0, 'avg': 0, 'std': 0},
                             'memory': calculate_stats(sim_memories),
                             'test_vectors': {'min': 0, 'max': 0, 'avg': 0, 'std': 0},
+                            'gate_evaluations': calculate_stats(sim_gate_evals),
                         },
                     },
                     {
@@ -173,6 +253,8 @@ def run_dse_sim_kernels_iterative():
                             'backtracks': {'min': 0, 'max': 0, 'avg': 0, 'std': 0},
                             'memory': calculate_stats(ev_memories),
                             'test_vectors': {'min': 0, 'max': 0, 'avg': 0, 'std': 0},
+                            'gate_evaluations': calculate_stats(ev_gate_evals),
+                            'duplicates_filtered': calculate_stats(ev_duplicate_filters),
                         },
                     },
                 ],

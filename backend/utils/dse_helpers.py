@@ -283,13 +283,13 @@ def build_fill_policy_summary(result_data, netlist_name, policy):
     }
 
 
-def run_simulation_kernel_with_memory(circuit, kernel):
+def run_simulation_kernel_with_memory(circuit, kernel, changed_inputs=None):
     tracemalloc.start()
     t0 = perf_counter()
     if kernel == 'simulate':
-        simulate(circuit)
+        kernel_stats = simulate(circuit)
     else:
-        simulate_event_driven(circuit)
+        kernel_stats = simulate_event_driven(circuit, changed_inputs=changed_inputs)
     wall_ms = (perf_counter() - t0) * 1000.0
     _cur, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -298,6 +298,7 @@ def run_simulation_kernel_with_memory(circuit, kernel):
     return {
         '_wall_time_ms': wall_ms,
         '_memory_peak_bytes': peak,
+        '_kernel_stats': kernel_stats or {},
         'po_values': po_values,
     }
 

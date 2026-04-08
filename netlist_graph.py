@@ -243,54 +243,77 @@ def eval_gate(node):
     return 'X'
 
 
-def simulate_event_driven(circuit):
+def simulate_event_driven(circuit, changed_inputs=None):
     """
     Event-Driven True-Value Simulation Algorithm.
     
-    Only re-evaluates gates whose inputs have changed.
-    Propagates value changes through the circuit via event queue.
-    
-    Algorithm:
-    1. Initialize queue with all PI nodes and CONST nodes.
-    2. While queue not empty:
-       - Dequeue node
-       - Evaluate node output from fanin values
-       - If output changed, enqueue all fanout gates
-    3. Stop when queue is empty (all transients propagated)
+    Zero-delay event-driven simulation:
+    1. Read the current input condition.
+    2. Put the fanout gates of active PIs and constants into the queue.
+    3. While the queue is not empty:
+       - Dequeue the next gate g.
+       - Evaluate g from its current fanin values.
+       - If g's output changes, enqueue all fanout gates of g.
+    4. When the queue becomes empty, the circuit has settled for this vector.
     """
     from collections import deque
     
     activity_queue = deque()
-    
-    for pi in circuit.PIs:
-        activity_queue.append(pi)
-    
-    for node in circuit.nodes.values():
-        if node.role == "CONST":
+    queued = set()
+    gate_evaluations = 0
+    enqueue_attempts = 0
+    unique_enqueues = 0
+
+    def schedule(node):
+        nonlocal enqueue_attempts, unique_enqueues
+        enqueue_attempts += 1
+        if node not in queued:
+            queued.add(node)
+            unique_enqueues += 1
             activity_queue.append(node)
+
+    if changed_inputs is None:
+        seed_nodes = list(circuit.PIs)
+    else:
+        seed_nodes = list(changed_inputs)
+
+    for node in seed_nodes:
+        for fanout_gate in node.fanouts:
+            schedule(fanout_gate)
+
+    if changed_inputs is None:
+        for node in circuit.nodes.values():
+            if node.role == "CONST":
+                for fanout_gate in node.fanouts:
+                    schedule(fanout_gate)
     
     while activity_queue:
         node = activity_queue.popleft()
-        
-        if node.role in ["PI", "CONST"]:
-            for fanout_gate in node.fanouts:
-                activity_queue.append(fanout_gate)
-            continue
-        
+        queued.discard(node)
+
         if node.level == -1:
             continue
         
         old_value = node.value
         new_value = eval_gate(node)
+        gate_evaluations += 1
         node.value = new_value
         
         if new_value != old_value:
             for fanout_gate in node.fanouts:
-                activity_queue.append(fanout_gate)
+                schedule(fanout_gate)
+
+    return {
+        'gate_evaluations': gate_evaluations,
+        'enqueue_attempts': enqueue_attempts,
+        'unique_enqueues': unique_enqueues,
+        'duplicate_enqueues_filtered': enqueue_attempts - unique_enqueues,
+    }
 
 
 def simulate(circuit):
     nodes_sorted = sorted(circuit.nodes.values(), key=lambda n: n.level)
+    gate_evaluations = 0
 
     for node in nodes_sorted:
         if node.role in ["PI", "CONST"]:
@@ -298,6 +321,11 @@ def simulate(circuit):
         if node.level == -1:
             continue
         node.value = eval_gate(node)
+        gate_evaluations += 1
+
+    return {
+        'gate_evaluations': gate_evaluations,
+    }
 
 
 def generate_faults(circuit):
